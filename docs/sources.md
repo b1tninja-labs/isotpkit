@@ -1,0 +1,27 @@
+# Sources
+
+## Primary standard
+
+- **ISO 15765-2:2016** — *Road vehicles — Diagnostic communication over Controller Area Network (DoCAN) —
+  Part 2: Transport protocol and network layer services.* Every frame-format and parameter detail is grounded
+  here, read through the `primarysource` `iso_*` tools on `iso:15765-2@2016`. The clause-by-clause map is
+  `docs/iso-map.md`.
+
+## Research notes (read-only)
+
+- **GM GMLAN 11-bit addressing convention** — `volt` repository, `docs/OBD-CONFIG-DID-APPENDIX.md` (branch
+  `claude/obd-config-re-887200`). Documents the GMLAN 11-bit convention: the physical **response** ID is the
+  **request** ID + `0x400` (e.g. `0x24X` -> `0x64X`), and the flow/acceptance **filter** ID is the request ID
+  + `0x300` (`0x24X` -> `0x54X`). Implemented in `isotpkit.addressing` (`gmlan_response_id`,
+  `gmlan_filter_id`). These notes come from an authorized assessment of the owner's GM head unit and the
+  Voltage OBD app; `isotpkit` carries only the addressing arithmetic, no captured data.
+
+## Siblings (context, not dependencies)
+
+- **`udsdiag`** — the application-layer UDS/GMLAN request/response codec that sits *above* this transport
+  layer and deliberately stops at the reassembled application PDU. `isotpkit` is the layer that segments and
+  reassembles that PDU across CAN frames. `isotpkit` does **not** import `udsdiag`.
+- **`obd-bridge` / `fakeobd`** — adapters and a server, not a reusable codec. `isotpkit` is the codec they (or
+  anything else needing ISO-TP) could build on; it is distinct from them.
+- **`spskit`, `voltkit`** — sibling vehicle tools in the same workspace; the project layout and the ROADMAP
+  obligation-matrix discipline follow `spskit` and `udsdiag`.
