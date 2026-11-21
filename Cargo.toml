@@ -1,0 +1,21 @@
+[package]
+name = "isotpkit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Offline ISO 15765-2:2016 (ISO-TP / DoCAN) transport/network-layer codec."
+license = "Apache-2.0"
+readme = "README.md"
+publish = false # remove once the name is confirmed free: python names.py --crates isotpkit
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# `PciType`/`FlowStatus` and the ISO 15765-2 abbreviations (N_PCI, SF_DL, STmin) are the
+# standard's own terms; these two pedantic lints only fight that vocabulary.
+module_name_repetitions = "allow"
+doc_markdown = "allow"
