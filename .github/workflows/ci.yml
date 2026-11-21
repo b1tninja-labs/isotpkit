@@ -25,3 +25,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85
       - run: cargo test
+  bindings:
+    # The optional Python bindings (the `isotpkit-py` member) are not in the default build, so
+    # they get their own job with a Python toolchain for pyo3.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: cargo clippy -p isotpkit-py --all-targets -- -D warnings
+      - name: Build the wheel and run the Python tests
+        run: |
+          python -m pip install --upgrade pip maturin pytest
+          maturin build -m py/Cargo.toml --out dist
+          pip install --no-index --find-links dist isotpkit
+          pytest py/tests

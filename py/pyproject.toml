@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "isotpkit"
+version = "0.1.0"
+description = "Python bindings for isotpkit, the ISO 15765-2:2016 (ISO-TP / DoCAN) transport-layer codec."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["iso-tp", "iso15765", "docan", "can", "uds", "gmlan", "transport"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[tool.maturin]
+# The Rust cdylib is `isotpkit_py`; the imported Python module is `isotpkit`.
+module-name = "isotpkit"
+# An abi3 wheel (the pyo3 `abi3-py39` feature) works on CPython 3.9 and newer.

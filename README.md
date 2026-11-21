@@ -48,6 +48,24 @@ cargo run -- decode "02 3e 00"       # SingleFrame SF_DL=2 data=3e00
 cargo run -- segment "22f190 68656c6c6f20776f726c64"
 ```
 
+## Python bindings
+
+An optional Python extension (the `isotpkit-py` workspace member, under `py/`) exposes the codec to
+Python via [pyo3](https://pyo3.rs). The core crate stays pure `no_std` with `unsafe` forbidden; the
+bindings are a separate crate (`std`, pyo3). Build with [maturin](https://www.maturin.rs):
+
+```
+cd py && maturin develop && pytest
+```
+
+```python
+import isotpkit
+frames = isotpkit.segment(b"\x22\xf1\x90 payload")   # list[bytes]
+assert isotpkit.reassemble(frames) == b"\x22\xf1\x90 payload"
+```
+
+See [`py/README.md`](py/README.md) for the full surface.
+
 ## Grounding
 
 Every frame-format and parameter detail is grounded in ISO 15765-2:2016, read through the
