@@ -8,6 +8,12 @@ license = "Apache-2.0"
 readme = "README.md"
 publish = false # remove once the name is confirmed free: python names.py --crates isotpkit
 
+# The core codec is this crate alone; the optional Python bindings live in a separate member
+# (`py/`) so this crate stays `no_std` and keeps `unsafe` forbidden, which the pyo3 macros cannot.
+# The default gates (no `--workspace`) build only this crate, so they need no Python toolchain.
+[workspace]
+members = ["py"]
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

@@ -38,12 +38,19 @@ builds on Rust 1.85 (the MSRV) and runs the release-profile tests.
 5. **No application layer and no dependency on `udsdiag`.** This crate stops at the reassembled
    application PDU bytes. Service SIDs, NRCs and DIDs belong to `udsdiag`, which sits above and does
    not depend on this one.
-6. **`no_std` + `alloc`, no runtime dependencies.** The library is `#![no_std]`; only `src/main.rs`
-   uses `std`. `unsafe` is forbidden by the lint table — do not relax it. Lints live in `Cargo.toml`
-   `[lints]`, not scattered `#![…]` attributes.
-7. **Overlap with `fakeobd`.** `fakeobd/crates/isotp` is a second ISO-TP implementation. Keep this
-   crate standalone and fully grounded; a consolidation into one canonical crate is the `[open]`
-   row in `ROADMAP.md`, a cross-repo decision not to be taken unilaterally from here.
+6. **`no_std` + `alloc`, no runtime dependencies in the core.** The core crate is `#![no_std]`; only
+   `src/main.rs` uses `std`. `unsafe` is forbidden by the lint table — do not relax it in the core.
+   Lints live in `Cargo.toml` `[lints]`, not scattered `#![…]` attributes.
+7. **Python bindings are a separate member.** The optional pyo3 bindings live in `py/`
+   (`isotpkit-py`, imported as the Python module `isotpkit`). They are `std` and allow `unsafe`
+   (pyo3's macros need it) — which is exactly why they are not in the core crate. They depend on the
+   core via a path dependency and add no API the core does not already expose. The default gates
+   (no `--workspace`) build only the core; the bindings have their own CI job. Build/test them with
+   `cd py && maturin develop && pytest`, or lint with `PYO3_PYTHON=<python> cargo clippy -p
+   isotpkit-py -- -D warnings`.
+8. **Overlap with `fakeobd`.** `fakeobd/crates/isotp` is a second ISO-TP implementation. Keep this
+   crate standalone and fully grounded; the consolidation (fakeobd depending on `isotpkit`) is the
+   `[open]` row in `ROADMAP.md`, pursued in the `fakeobd` repo, not unilaterally from here.
 
 ## Workspace rules
 

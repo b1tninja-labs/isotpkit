@@ -87,6 +87,13 @@ edit either file.
 | [ok] | `cli::describe` renders a FlowControl with its resolved STmin, and `run` reports usage/bad-hex errors | `src/cli.rs` | `cli::tests::describe_flow_control` |
 | [ok] | The library is `#![no_std]` + `alloc`; only `src/main.rs` uses `std`. A `std` leak fails the no_std build | `src/lib.rs`; `Cargo.toml` | `compile`: `cargo check` builds the `not(test)` `#![no_std]` lib target |
 
+## Python bindings (`py/`, the `isotpkit-py` member)
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [ok] | The pyo3 module `isotpkit` exposes `segment`/`reassemble` (bytes frames), `describe`, `stmin_microseconds`/`encode_stmin` and `gmlan_response_id`/`gmlan_filter_id`, raising `ValueError` on bad input | `py/src/lib.rs`; `py/README.md` | `py/tests/test_isotpkit.py` (CI `bindings` job: maturin build + pytest) |
+| [ok] | The bindings are a separate crate (`std`, `unsafe` allowed) so the core stays `no_std` + unsafe-forbidden; default gates build only the core | `py/Cargo.toml`; `Cargo.toml` `[workspace]` | `.github/workflows/ci.yml` `bindings` job (clippy `-p isotpkit-py -D warnings`) |
+
 ## Planned (decoder rejects, not built)
 
 | Status | Obligation | Anchor | Test |
@@ -111,6 +118,10 @@ marked `[unread]` in its own ROADMAP (its PCI nibbles, FlowStatus and STmin were
 against §9.6). `isotpkit` is the standalone, fully-grounded, sans-I/O crate: typed N_PDUs with
 `encode`/`decode`, a `SeparationTime` and timing/addressing constants, and `no_std` support.
 
-Long-term these should collapse to one canonical ISO-TP crate that `fakeobd` depends on. That is a
-cross-repo decision (which crate name survives, whose API, how `fakeobd` migrates) and is left as
-the `[open]` consolidation row above, not taken here.
+The owner has chosen to consolidate (2026-11-21): `fakeobd` should depend on `isotpkit` and drop its
+own `isotp` crate, and `isotpkit` now carries Python bindings so the Python surface is preserved.
+The `fakeobd`-side migration is pursued in the `fakeobd` repository (its own session), since it
+touches that repo's scope rules and call sites; it stays the `[open]` consolidation row above until
+it lands. If `fakeobd` finds `isotpkit`'s API short of what it needs (e.g. a receiver-side
+buffer-limit / overflow signal), that is an `isotpkit` change to coordinate here, not a fork of the
+codec.
