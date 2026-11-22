@@ -187,6 +187,7 @@ pub struct RxSession {
     waits_sent: u8,
     wft_max: u8,
     active: bool,
+    rx_dl: Option<usize>,
 }
 
 impl RxSession {
@@ -210,6 +211,7 @@ impl RxSession {
             waits_sent: 0,
             wft_max,
             active: false,
+            rx_dl: None,
         }
     }
 
@@ -252,6 +254,8 @@ impl RxSession {
                 } else {
                     self.reassembler.feed(&SegmentPdu::First(ff))?;
                     self.active = true;
+                    // RX_DL is the FirstFrame's CAN_DL, fixed for this reception (§9.5.3, §9.5.4).
+                    self.rx_dl = Some(frame.len());
                     self.cfs_since_fc = 0;
                     self.waits_sent = 0;
                     RxAction::SendFlowControl(self.cts())
@@ -261,6 +265,12 @@ impl RxSession {
             NPdu::Consecutive(cf) => {
                 // A ConsecutiveFrame with no reception in progress is ignored (§9.8.3).
                 if !self.active {
+                    return Ok(RxAction::Ignored);
+                }
+                // Verify the frame's CAN_DL against RX_DL (§9.6.4.1, §9.5.3): every CF must match
+                // RX_DL, except the last one, which may be shorter but must still carry the bytes
+                // the message needs. A CAN_DL smaller than that is ignored (§10.4.3).
+                if !self.consecutive_can_dl_ok(frame.len()) {
                     return Ok(RxAction::Ignored);
                 }
                 if let Some(message) = self.reassembler.feed(&SegmentPdu::Consecutive(cf))? {
@@ -278,6 +288,28 @@ impl RxSession {
             }
             // A receiver does not expect a FlowControl; ignore it (§9.8.3).
             NPdu::Flow(_) => Ok(RxAction::Ignored),
+        }
+    }
+
+    /// Whether a `ConsecutiveFrame` of this `CAN_DL` is acceptable for the reception in progress.
+    ///
+    /// Per §9.6.4.1 / §9.5.3 (Figure 9, Key 1): a non-last CF must have `CAN_DL` equal to `RX_DL`;
+    /// the last CF may be shorter (`CAN_DL` ≤ `RX_DL`) but must still carry the remaining bytes. A
+    /// `CAN_DL` below what the N_PDU implies is rejected and the caller ignores the frame (§10.4.3).
+    fn consecutive_can_dl_ok(&self, can_dl: usize) -> bool {
+        let Some(rx_dl) = self.rx_dl else {
+            return false;
+        };
+        let header = self.addressing.header_len();
+        // Data bytes a CF carries = CAN_DL − the address byte(s) − the 1-byte CF N_PCI.
+        let cf_capacity = rx_dl - header - 1;
+        let remaining = self.reassembler.remaining().unwrap_or(0);
+        if remaining > cf_capacity {
+            // Not the last CF: its CAN_DL must match RX_DL exactly.
+            can_dl == rx_dl
+        } else {
+            // The last CF: at most RX_DL, and large enough for the bytes still needed.
+            can_dl <= rx_dl && can_dl >= header + 1 + remaining
         }
     }
 
@@ -318,6 +350,7 @@ impl RxSession {
         self.active = false;
         self.cfs_since_fc = 0;
         self.waits_sent = 0;
+        self.rx_dl = None;
     }
 }
 
@@ -447,6 +480,37 @@ mod tests {
         // An unknown N_PCItype (reserved 0x4..): ignored.
         assert_eq!(rx.on_frame(&[0x40, 0, 0]).unwrap(), RxAction::Ignored);
         assert!(!rx.in_progress());
+    }
+
+    #[test]
+    fn consecutive_frame_can_dl_must_match_rx_dl() {
+        // BS 0, normal addressing: RX_DL comes from the FirstFrame's CAN_DL (= 8 here).
+        let mut rx = RxSession::new(Addressing::Normal, 1 << 20, 0, 0, 4);
+        // FF announcing a 16-byte message: 2 N_PCI bytes + 6 data bytes.
+        let ff = [0x10, 0x10, 10, 11, 12, 13, 14, 15];
+        assert!(matches!(
+            rx.on_frame(&ff).unwrap(),
+            RxAction::SendFlowControl(_)
+        ));
+        // A non-last CF whose CAN_DL is less than RX_DL is ignored (§9.6.4.1, §10.4.3), and the
+        // reception stays open rather than being corrupted.
+        assert_eq!(rx.on_frame(&[0x21, 1, 2, 3]).unwrap(), RxAction::Ignored);
+        assert!(rx.in_progress());
+        // The correct full-length CF (CAN_DL == RX_DL) is accepted; 3 bytes remain.
+        assert_eq!(
+            rx.on_frame(&[0x21, 16, 17, 18, 19, 20, 21, 22]).unwrap(),
+            RxAction::Continue
+        );
+        // The last CF may be shorter than RX_DL, but one too short for the remaining 3 bytes is
+        // ignored (DLC smaller than the N_PDU implies, §10.4.3).
+        assert_eq!(rx.on_frame(&[0x22, 40]).unwrap(), RxAction::Ignored);
+        // A last CF that carries exactly the remaining bytes completes the message.
+        assert_eq!(
+            rx.on_frame(&[0x22, 40, 41, 42]).unwrap(),
+            RxAction::Message(vec![
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 40, 41, 42
+            ])
+        );
     }
 
     #[test]

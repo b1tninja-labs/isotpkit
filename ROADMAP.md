@@ -124,7 +124,7 @@ cited; `docs/iso-map.md` has the map.
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
 | [open] | Reserved-CAN-ID handling: reject or avoid the ISO-reserved 11-bit ranges 0x7F4–0x7F6 and 0x7FA–0x7FB | `docs/iso-map.md` §B | none: `addressing` does not check reserved IDs |
-| [open] | DLC error handling: ignore a received frame whose CAN_DL is smaller than the N_PCI implies | `docs/iso-map.md` §10.4.3 | none: not modelled as the §10.4.3 rule |
+| [ok] | DLC error handling: ignore a received frame whose CAN_DL is smaller than the N_PCI implies | `docs/iso-map.md` §10.4.3 | `session::tests::consecutive_frame_can_dl_must_match_rx_dl` |
 
 ### Network-layer behaviour
 
