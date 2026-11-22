@@ -28,13 +28,15 @@ builds on Rust 1.85 (the MSRV) and runs the release-profile tests.
    timing value is read from ISO 15765-2:2016 through the `primarysource` `iso_*` tools first and
    cited in `docs/iso-map.md`. Do not state an ISO section or value from memory (a root `AGENTS.md`
    rule).
-3. **Codec, not stack.** No bus (socketcan, J2534), no live timer loop, no FlowControl pacing. The
-   timing parameters are named constants only. A paced sender/receiver is a ROADMAP item, not a
-   quiet addition here.
-4. **Classic CAN only.** `CAN_DL` is at most 8 and addressing is normal (no in-band address byte).
-   CAN FD, the SF/FF escape sequences and extended/mixed addressing are ROADMAP rows; the decoder
-   rejects those frames rather than guessing. Do not widen the decoder without the matching ROADMAP
-   row and test.
+3. **Sans-I/O: no bus, no live timer.** No bus (socketcan, J2534) and no live timer loop. The
+   `session` module paces a sender/receiver (BlockSize, STmin, WAIT, OVFLW, N_WFTmax) by *emitting*
+   actions — send this frame, wait for a FlowControl, wait this STmin — for the caller to perform;
+   it owns no bus and runs no timer. The timing parameters are still named constants only. Keep new
+   work sans-I/O in the same way.
+4. **Grounded frame scope.** Classic CAN and CAN FD (`CAN_DL` up to 64), normal/extended/mixed
+   addressing, the SF and 32-bit FF escapes — all built. Frames the codec does not implement are
+   rejected, not guessed. Do not widen the codec without the matching ROADMAP row, test, and a
+   `primarysource` citation.
 5. **No application layer and no dependency on `udsdiag`.** This crate stops at the reassembled
    application PDU bytes. Service SIDs, NRCs and DIDs belong to `udsdiag`, which sits above and does
    not depend on this one.

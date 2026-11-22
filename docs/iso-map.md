@@ -61,6 +61,17 @@ Grounded additions from the CAN FD work; these are built in `pci` and `segment`.
 | ConsecutiveFrame carries up to CAN_DL − 1 bytes on CAN FD | §9.6.4 | `pci::ConsecutiveFrame` |
 | Mandatory padding of CAN FD frames to the next valid CAN_DL (value 0xCC) | §10.4.2.3 | `pci` encoders |
 
+## FlowControl pacing (implemented, sans-I/O)
+
+The `session` module paces a sender/receiver by emitting actions; it owns no bus and runs no timer.
+
+| Detail | Clause | Where in code |
+|---|---|---|
+| CTS/BS/STmin: after a FlowControl CTS the sender sends up to BlockSize ConsecutiveFrames, spaced by STmin; BS = 0 sends all | §9.6.5 | `session::TxSession` |
+| FC.WAIT keeps the sender waiting (restart N_Bs); FC.Overflow aborts with N_BUFFER_OVFLW | §9.6.5 | `session::TxSession::on_flow_control` |
+| The receiver sends a FlowControl after the FirstFrame and after each block of BlockSize CFs; Overflow when FF_DL exceeds the buffer | §9.6.5 | `session::RxSession::on_frame` |
+| N_WFTmax: the receiver may send at most that many FC.WAIT in a row, then N_WFT_OVRN | §9.7, §9.8.4 | `session::RxSession::request_wait` |
+
 ## Spec surface not yet implemented (ROADMAP `[open]` rows)
 
 The clauses below are part of ISO 15765-2:2016 but are not implemented in `isotpkit` today; each is a
@@ -73,7 +84,6 @@ remaining spec, and so a later implementation has the clause to read first.
 | Service data unit parameters: Mtype, N_AI, Length, MessageData, Parameter, N_Result, Result_ChangeParameter | §8.3 | planned |
 | `<N_Result>` enumeration — N_OK, N_TIMEOUT_A, N_TIMEOUT_Bs, N_TIMEOUT_Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR; the first error in that list is the one reported | §8.3.7 | planned |
 | Creating/verifying received frames by N_TAtype, and the §9.6.4.1 rule that every CF's CAN_DL match RX_DL | §9.5.2–§9.5.3, §9.6.4.1 | planned (sender-side TX_DL sizing is built; receive-side CAN_DL verification is not) |
-| N_WFTmax overrun → N_WFT_OVRN (receiver), seen by the sender as N_TIMEOUT_Bs | §9.8.4 | planned |
 | Unexpected arrival of N_PDU — Table 23 ignore/terminate rules over NWL status, half/full duplex and N_AI; terminate + N_UNEXP_PDU on a receive in progress | §9.8.3 | planned |
 | Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
 | DLC error handling: a CAN frame with DLC smaller than the N_PCI implies is ignored | §10.4.3 | planned |

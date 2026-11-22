@@ -81,6 +81,10 @@ pub enum Error {
     ConsecutiveFrameWithoutFirstFrame,
     /// An N_PDU sequence ended without completing a message.
     IncompleteSequence,
+    /// A `FlowControl` Overflow aborted the send (`N_BUFFER_OVFLW`) (§9.6.5).
+    BufferOverflow,
+    /// The receiver sent `N_WFTmax` FC.WAIT frames in a row (`N_WFT_OVRN`) (§9.7, §9.8.4).
+    WaitFrameOverrun(u8),
 }
 
 impl fmt::Display for Error {
@@ -156,6 +160,12 @@ impl fmt::Display for Error {
             }
             Error::IncompleteSequence => {
                 f.write_str("the N_PDU sequence did not complete a message")
+            }
+            Error::BufferOverflow => {
+                f.write_str("the send was aborted by a FlowControl Overflow (N_BUFFER_OVFLW, 9.6.5)")
+            }
+            Error::WaitFrameOverrun(max) => {
+                write!(f, "the receiver sent {max} FC.WAIT frames in a row (N_WFT_OVRN, 9.7)")
             }
         }
     }
