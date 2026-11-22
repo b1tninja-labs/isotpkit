@@ -131,7 +131,7 @@ cited; `docs/iso-map.md` has the map.
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
 | [open] | Interleaving: reassemble segmented messages on distinct N_AI in parallel (multi-channel), as a gateway needs | `docs/iso-map.md` §9.9 | none: `Reassembler` is single-channel |
-| [open] | The `<N_Result>` outcome codes (N_OK, N_TIMEOUT_A/Bs/Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR) with the first-in-list priority ordering | `docs/iso-map.md` §8.3 | none: `Error` is the crate's own enum, not the N_Result model |
+| [ok] | The `<N_Result>` outcome codes (N_OK, N_TIMEOUT_A/Bs/Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR) with the first-in-list priority ordering | `docs/iso-map.md` §8.3 | `result::tests::ranks_follow_the_list_order`, `first_in_list_takes_the_earlier_value`, `sides_match_the_standard`, `errors_map_to_their_result_codes` |
 | [open] | The network-layer service primitives (N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters) and their SDU parameters | `docs/iso-map.md` §8.2, §8.3 | none: no service interface is built |
 | [open] | Consolidate with `fakeobd`'s `isotp` crate into one canonical ISO-TP (see Overlap) | `docs/sources.md` | none: a cross-repo decision, deferred |
 

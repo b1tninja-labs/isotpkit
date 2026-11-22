@@ -73,6 +73,19 @@ The `session` module paces a sender/receiver by emitting actions; it owns no bus
 | N_WFTmax: the receiver may send at most that many FC.WAIT in a row, then N_WFT_OVRN | §9.7, §9.8.4 | `session::RxSession::request_wait` |
 | Unexpected N_PDU (Table 23): ignore a stray CF/FC/unknown; a mid-reception SF/FF terminates the prior with N_UNEXP_PDU; run one session per N_AI | §9.8.3 | `session::RxSession::on_frame` |
 
+## `<N_Result>` outcome codes (implemented)
+
+The §8.3.7 enumeration the `N_USData` service primitives report, with the two rules the clause
+states about it. The crate runs no timer, so the three timeout codes are named but not produced
+from the crate's own `Error`.
+
+| Detail | Clause | Where in code |
+|---|---|---|
+| The `<N_Result>` enumeration: N_OK, N_TIMEOUT_A/Bs/Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR | §8.3.7 | `result::NResult` |
+| Priority ordering — the value found first in the list wins when several errors are discovered at once | §8.3.7 | `result::NResult::rank`, `result::NResult::first_in_list`, `result::NResult::earliest` |
+| The side each value can be issued to (sender only / receiver only / both) | §8.3.7 | `result::NResult::side` |
+| Mapping the crate's own decode/encode errors onto their `<N_Result>` value; anything without a dedicated code is N_ERROR | §8.3.7 | `result::NResult::from` |
+
 ## Spec surface not yet implemented (ROADMAP `[open]` rows)
 
 The clauses below are part of ISO 15765-2:2016 but are not implemented in `isotpkit` today; each is a
@@ -83,7 +96,6 @@ remaining spec, and so a later implementation has the clause to read first.
 |---|---|---|
 | Network-layer service primitives: N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters | §8.2 | planned |
 | Service data unit parameters: Mtype, N_AI, Length, MessageData, Parameter, N_Result, Result_ChangeParameter | §8.3 | planned |
-| `<N_Result>` enumeration — N_OK, N_TIMEOUT_A, N_TIMEOUT_Bs, N_TIMEOUT_Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR; the first error in that list is the one reported | §8.3.7 | planned |
 | Creating/verifying received frames by N_TAtype, and the §9.6.4.1 rule that every CF's CAN_DL match RX_DL | §9.5.2–§9.5.3, §9.6.4.1 | planned (sender-side TX_DL sizing is built; receive-side CAN_DL verification is not) |
 | Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
 | DLC error handling: a CAN frame with DLC smaller than the N_PCI implies is ignored | §10.4.3 | planned |
