@@ -221,6 +221,12 @@ impl Reassembler {
         self.expected.is_some()
     }
 
+    /// The number of message bytes still to be received, or `None` when no message is in progress.
+    #[must_use]
+    pub fn remaining(&self) -> Option<usize> {
+        self.expected.map(|expected| expected - self.buffer.len())
+    }
+
     /// Discard any in-progress reassembly state.
     pub fn reset(&mut self) {
         self.expected = None;

@@ -72,6 +72,8 @@ The `session` module paces a sender/receiver by emitting actions; it owns no bus
 | The receiver sends a FlowControl after the FirstFrame and after each block of BlockSize CFs; Overflow when FF_DL exceeds the buffer | §9.6.5 | `session::RxSession::on_frame` |
 | N_WFTmax: the receiver may send at most that many FC.WAIT in a row, then N_WFT_OVRN | §9.7, §9.8.4 | `session::RxSession::request_wait` |
 | Unexpected N_PDU (Table 23): ignore a stray CF/FC/unknown; a mid-reception SF/FF terminates the prior with N_UNEXP_PDU; run one session per N_AI | §9.8.3 | `session::RxSession::on_frame` |
+| Receive-side CAN_DL verification: RX_DL is the FF's CAN_DL; every CF must match it, only the last may be shorter (and must carry the remaining bytes) | §9.5.3, §9.6.4.1 | `session::RxSession::consecutive_can_dl_ok` |
+| DLC error handling: a CF whose CAN_DL is smaller than the N_PCI implies is ignored without further action | §10.4.3 | `session::RxSession::consecutive_can_dl_ok` |
 
 ## Network-layer service primitives (implemented)
 
@@ -108,9 +110,8 @@ remaining spec, and so a later implementation has the clause to read first.
 
 | Detail | Clause | Status |
 |---|---|---|
-| Creating/verifying received frames by N_TAtype, and the §9.6.4.1 rule that every CF's CAN_DL match RX_DL | §9.5.2–§9.5.3, §9.6.4.1 | planned (sender-side TX_DL sizing is built; receive-side CAN_DL verification is not) |
+| Verifying a received frame's CAN type by N_TAtype (CLASSICAL CAN vs CAN FD filtering) | §9.5.2–§9.5.3 | planned (the receive-side CAN_DL/RX_DL check of §9.6.4.1 is built; frame-type filtering needs the CAN frame's type, which the sans-I/O byte slice does not carry) |
 | Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
-| DLC error handling: a CAN frame with DLC smaller than the N_PCI implies is ignored | §10.4.3 | planned |
 | ISO-reserved 11-bit CAN IDs: 0x7F4–0x7F6 and 0x7FA–0x7FB | §B (Annex B), Table B.1 | planned |
 
 ## Citation
