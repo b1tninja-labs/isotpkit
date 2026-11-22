@@ -37,6 +37,7 @@ extern crate alloc;
 pub mod addressing;
 pub mod cli;
 pub mod flowcontrol;
+pub mod interleave;
 pub mod pci;
 pub mod result;
 pub mod segment;
