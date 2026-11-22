@@ -34,7 +34,11 @@ as 9.6.4.3 live inside those sections and are named in prose where they matter.
 | Default frame padding value 0xCC (TX_DL = 8, 10.4.2.1) | §10.4.2 | `pci::DEFAULT_PADDING` |
 | CAN frame data optimization (shortened DLC, no padding, 10.4.2.2) | §10.4.2 | `pci::*::encode_with(false, …)` |
 | Normal addressing: whole N_AI is the CAN identifier; data field is N_PCI + N_Data | §10.3.2, Tables 24–25 | `pci` (no in-band address byte), `addressing::NormalAddressing` |
-| Extended / normal-fixed / mixed addressing (in-band address byte) — planned | §10.3.3–§10.3.5 | ROADMAP (extended addressing) |
+| Extended addressing: N_TA in the first data byte, then N_PCI + N_Data | §10.3.4, Tables 28–29 | `pci::Addressing::Extended`, `pci::encode_addressed`/`decode_addressed` |
+| Mixed addressing: N_AE in the first data byte, then N_PCI + N_Data | §10.3.5, Tables 30–33 | `pci::Addressing::Mixed` |
+| Normal-fixed 29-bit CAN ID: 0x18DA (physical) / 0x18DB (functional), N_TA in 15–8, N_SA in 7–0 | §10.3.3, Tables 26–27 | `addressing::normal_fixed_id` |
+| Mixed 29-bit CAN ID: 0x18CE (physical) / 0x18CD (functional), N_TA in 15–8, N_SA in 7–0 | §10.3.5, Tables 30–31 | `addressing::mixed_id_29bit` |
+| FF_DLmin for TX_DL=8: 8 (normal), 7 (extended/mixed) | §9.6.3, Table 14 | `pci::FF_DL_MIN`, `pci::FF_DL_MIN_EXTENDED` |
 
 ## Timing (named only — no bus, no timer loop)
 

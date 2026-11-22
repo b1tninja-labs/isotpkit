@@ -76,6 +76,7 @@ edit either file.
 | [ok] | `addressing::NormalAddressing::new` holds an 11-bit request/response pair and rejects wider IDs | `docs/iso-map.md` §10.3.2 | `addressing::tests::non_11bit_id_is_rejected` |
 | [ok] | `addressing::gmlan_response_id` offsets the response ID by +0x400 | `docs/sources.md` (volt appendix) | `addressing::tests::gmlan_response_offset` |
 | [ok] | `addressing::gmlan_filter_id` offsets the filter ID by +0x300 | `docs/sources.md` (volt appendix) | `addressing::tests::gmlan_filter_offset` |
+| [ok] | Extended, normal-fixed and mixed addressing (in-band address byte) | `src/pci.rs` (`Addressing`, `encode_addressed`/`decode_addressed`); `src/addressing.rs`; `docs/iso-map.md` §10.3.3–§10.3.5 | `pci::tests::extended_addressing_prepends_the_target_address`; `pci::tests::mixed_addressing_round_trips_all_types`; `addressing::tests::normal_fixed_and_mixed_29bit_ids`; `segment::tests::extended_addressing_segmentation_round_trips` |
 | [ok] | `timing::parameter_names` names N_As, N_Ar, N_Bs, N_Br, N_Cs, N_Cr; `TimingParameter::timeout_ms` carries the Table 21 timeouts | `docs/iso-map.md` §9.8.1 | `timing::tests::timing_parameters_are_named` |
 
 ## Command line and crate shape
@@ -115,7 +116,6 @@ cited; `docs/iso-map.md` has the map.
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
-| [open] | Extended, normal-fixed and mixed addressing (in-band address byte) | `docs/iso-map.md` §10.3.3–§10.3.5 | none: only normal addressing is built |
 | [open] | Reserved-CAN-ID handling: reject or avoid the ISO-reserved 11-bit ranges 0x7F4–0x7F6 and 0x7FA–0x7FB | `docs/iso-map.md` §B | none: `addressing` does not check reserved IDs |
 | [open] | DLC error handling: ignore a received frame whose CAN_DL is smaller than the N_PCI implies | `docs/iso-map.md` §10.4.3 | none: not modelled as the §10.4.3 rule |
 

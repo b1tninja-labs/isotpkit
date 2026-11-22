@@ -33,6 +33,8 @@ pub const CF_DATA_MAX: usize = 7;
 pub const CF_DATA_FD_MAX: usize = 63;
 /// Minimum `FF_DL` (`TX_DL` = 8, normal addressing) (§9.6.3, Table 14).
 pub const FF_DL_MIN: usize = 8;
+/// Minimum `FF_DL` (`TX_DL` = 8, extended/mixed addressing) (§9.6.3, Table 14).
+pub const FF_DL_MIN_EXTENDED: usize = 7;
 /// Largest `FF_DL` without the 32-bit escape, 4095 (§9.6.3).
 pub const FF_DL_12BIT_MAX: usize = 0xFFF;
 /// Largest `FF_DL` with the 32-bit escape, 4294967295 (§9.6.3).
@@ -225,15 +227,18 @@ pub struct FirstFrame {
 impl FirstFrame {
     /// Build a `FirstFrame` from its `FF_DL` length and its first payload chunk.
     ///
+    /// The chunk length depends on the `TX_DL` and the addressing format (one byte smaller with an
+    /// in-band address byte), so it is only bounded to fit a frame here; the segmenter sizes it.
+    ///
     /// # Errors
     /// [`Error::FirstFrameLength`] if `length` is outside 8..=4294967295, and
-    /// [`Error::FirstFrameDataLength`] if `data` plus the N_PCI bytes is not a valid `CAN_DL`.
+    /// [`Error::FirstFrameDataLength`] if `data` is empty or cannot fit a frame with its N_PCI.
     pub fn new(length: usize, data: Vec<u8>) -> Result<FirstFrame, Error> {
-        if !(FF_DL_MIN..=FF_DL_32BIT_MAX).contains(&length) {
+        if !(FF_DL_MIN_EXTENDED..=FF_DL_32BIT_MAX).contains(&length) {
             return Err(Error::FirstFrameLength(length));
         }
         let pci_len = if length <= FF_DL_12BIT_MAX { 2 } else { 6 };
-        if !VALID_CAN_DL.contains(&(pci_len + data.len())) {
+        if data.is_empty() || pci_len + data.len() > CAN_FD_MAX_DL {
             return Err(Error::FirstFrameDataLength(data.len()));
         }
         Ok(FirstFrame { length, data })
@@ -490,6 +495,146 @@ pub fn decode_frame(frame: &[u8]) -> Result<NPdu, Error> {
     }
 }
 
+/// The ISO-TP addressing format, as it affects the on-wire frame (ISO 15765-2:2016, §10.3).
+///
+/// `Normal` (and normal-fixed) place no byte in the data field. `Extended` puts the target
+/// address `N_TA` in the first data byte, and `Mixed` puts the address extension `N_AE` there;
+/// the N_PCI and N_Data follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Addressing {
+    /// Normal (or normal-fixed) addressing: no in-band address byte (§10.3.2–§10.3.3).
+    Normal,
+    /// Extended addressing: `N_TA` (target address) in the first data byte (§10.3.4).
+    Extended(u8),
+    /// Mixed addressing: `N_AE` (address extension) in the first data byte (§10.3.5).
+    Mixed(u8),
+}
+
+impl Addressing {
+    /// The in-band address byte, if this format has one.
+    #[must_use]
+    pub const fn address_byte(self) -> Option<u8> {
+        match self {
+            Addressing::Normal => None,
+            Addressing::Extended(byte) | Addressing::Mixed(byte) => Some(byte),
+        }
+    }
+
+    /// The number of leading address bytes (0 for normal, 1 for extended/mixed).
+    #[must_use]
+    pub const fn header_len(self) -> usize {
+        match self {
+            Addressing::Normal => 0,
+            Addressing::Extended(_) | Addressing::Mixed(_) => 1,
+        }
+    }
+}
+
+/// Encode an N_PDU to an on-wire frame for a given addressing format, with mandatory padding.
+///
+/// For [`Addressing::Extended`] / [`Addressing::Mixed`] the address byte leads the frame, and the
+/// frame is padded up to the smallest valid `CAN_DL` that holds it. For [`Addressing::Normal`] the
+/// result equals the N_PDU's own `encode`.
+#[must_use]
+pub fn encode_addressed(pdu: &NPdu, addressing: Addressing, padding: u8) -> Vec<u8> {
+    let mut frame = Vec::new();
+    if let Some(byte) = addressing.address_byte() {
+        frame.push(byte);
+    }
+    match pdu {
+        NPdu::Single(sf) => frame.extend_from_slice(&sf.encode_with(false, padding)),
+        NPdu::First(ff) => frame.extend_from_slice(&ff.encode()),
+        NPdu::Consecutive(cf) => frame.extend_from_slice(&cf.encode_with(false, padding)),
+        NPdu::Flow(fc) => frame.extend_from_slice(&fc.encode_with(false, padding)),
+    }
+    let can_dl = can_dl_for(frame.len());
+    pad_to(frame, can_dl, padding)
+}
+
+/// Decode an on-wire frame for a given addressing format into its N_PDU.
+///
+/// For [`Addressing::Extended`] / [`Addressing::Mixed`] the leading address byte is skipped (its
+/// value is not matched against the format's byte — a receiver filters by CAN identifier).
+///
+/// # Errors
+/// As [`decode_frame`], plus [`Error::EmptyFrame`] if there is no N_PCI after the address byte.
+pub fn decode_addressed(frame: &[u8], addressing: Addressing) -> Result<NPdu, Error> {
+    require_frame(frame)?;
+    let offset = addressing.header_len();
+    if offset == 0 {
+        return decode_frame(frame);
+    }
+    let body = &frame[offset..];
+    if body.is_empty() {
+        return Err(Error::EmptyFrame);
+    }
+    let can_dl = frame.len();
+    match PciType::from_byte1(body[0])? {
+        PciType::SingleFrame => decode_single_frame_body(body, can_dl).map(NPdu::Single),
+        PciType::FirstFrame => decode_first_frame_body(body).map(NPdu::First),
+        PciType::ConsecutiveFrame => {
+            if body.len() < 2 {
+                return Err(Error::ConsecutiveFrameLength(0));
+            }
+            ConsecutiveFrame::new(body[0] & 0x0F, body[1..].to_vec()).map(NPdu::Consecutive)
+        }
+        PciType::FlowControl => {
+            if body.len() < 3 {
+                return Err(Error::FlowControlTooShort(body.len()));
+            }
+            let flow_status = FlowStatus::from_nibble(body[0] & 0x0F)?;
+            Ok(NPdu::Flow(FlowControl::new(flow_status, body[1], body[2])))
+        }
+    }
+}
+
+fn decode_single_frame_body(body: &[u8], can_dl: usize) -> Result<SingleFrame, Error> {
+    if can_dl <= CLASSIC_CAN_DL {
+        let sf_dl = usize::from(body[0] & 0x0F);
+        if sf_dl == 0 {
+            return Err(Error::ReservedSingleFrame);
+        }
+        let available = body.len() - 1;
+        if sf_dl > available {
+            return Err(Error::SingleFrameLengthExceedsFrame { sf_dl, available });
+        }
+        SingleFrame::new(body[1..=sf_dl].to_vec())
+    } else {
+        if body.len() < 2 || body[0] & 0x0F != 0 {
+            return Err(Error::ReservedSingleFrame);
+        }
+        let sf_dl = usize::from(body[1]);
+        let available = body.len() - 2;
+        if sf_dl <= SF_DL_MAX || sf_dl > available {
+            return Err(Error::SingleFrameLengthExceedsFrame { sf_dl, available });
+        }
+        SingleFrame::new(body[2..2 + sf_dl].to_vec())
+    }
+}
+
+fn decode_first_frame_body(body: &[u8]) -> Result<FirstFrame, Error> {
+    if body.len() < 2 {
+        return Err(Error::FirstFrameTooShort(body.len()));
+    }
+    let high = usize::from(body[0] & 0x0F);
+    if high == 0 && body[1] == 0 {
+        if body.len() < 6 {
+            return Err(Error::FirstFrameTooShort(body.len()));
+        }
+        let length = u32::from_be_bytes([body[2], body[3], body[4], body[5]]) as usize;
+        if length <= FF_DL_12BIT_MAX {
+            return Err(Error::FirstFrameEscapeUnderflow(length));
+        }
+        FirstFrame::new(length, body[6..].to_vec())
+    } else {
+        let length = (high << 8) | usize::from(body[1]);
+        if length < FF_DL_MIN_EXTENDED {
+            return Err(Error::FirstFrameLength(length));
+        }
+        FirstFrame::new(length, body[2..].to_vec())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -648,5 +793,53 @@ mod tests {
         assert_eq!(decode_frame(&sf.encode()).unwrap(), NPdu::Single(sf));
         assert_eq!(decode_frame(&[]), Err(Error::EmptyFrame));
         assert_eq!(decode_frame(&[0; 65]), Err(Error::FrameTooLong(65)));
+    }
+
+    #[test]
+    fn extended_addressing_prepends_the_target_address() {
+        // Extended addressing: N_TA 0xF1 leads, then the SF PCI and data, padded to 8.
+        let sf = NPdu::Single(SingleFrame::new(vec![0x3E, 0x00]).unwrap());
+        let frame = encode_addressed(&sf, Addressing::Extended(0xF1), DEFAULT_PADDING);
+        assert_eq!(frame, vec![0xF1, 0x02, 0x3E, 0x00, 0xCC, 0xCC, 0xCC, 0xCC]);
+        assert_eq!(
+            decode_addressed(&frame, Addressing::Extended(0xF1)).unwrap(),
+            sf
+        );
+        // Normal addressing through the addressed codec equals the plain encode.
+        assert_eq!(
+            encode_addressed(&sf, Addressing::Normal, DEFAULT_PADDING),
+            match &sf {
+                NPdu::Single(s) => s.encode(),
+                _ => unreachable!(),
+            }
+        );
+    }
+
+    #[test]
+    fn mixed_addressing_round_trips_all_types() {
+        let message_len = 40usize; // a multi-frame message's FirstFrame carries fewer bytes here
+        let ff = NPdu::First(FirstFrame::new(message_len, (0..5u8).collect()).unwrap());
+        let frame = encode_addressed(&ff, Addressing::Mixed(0xAA), DEFAULT_PADDING);
+        assert_eq!(frame[0], 0xAA, "N_AE leads");
+        assert_eq!(frame.len(), 8, "address + 2 PCI + 5 data = 8");
+        assert_eq!(
+            decode_addressed(&frame, Addressing::Mixed(0xAA)).unwrap(),
+            ff
+        );
+
+        let cf = NPdu::Consecutive(ConsecutiveFrame::new(1, (0..6u8).collect()).unwrap());
+        let cframe = encode_addressed(&cf, Addressing::Mixed(0xAA), DEFAULT_PADDING);
+        assert_eq!(
+            decode_addressed(&cframe, Addressing::Mixed(0xAA)).unwrap(),
+            cf
+        );
+
+        let fc = NPdu::Flow(FlowControl::continue_to_send());
+        let fcframe = encode_addressed(&fc, Addressing::Extended(0x55), DEFAULT_PADDING);
+        assert_eq!(fcframe[..4], [0x55, 0x30, 0, 0]);
+        assert_eq!(
+            decode_addressed(&fcframe, Addressing::Extended(0x55)).unwrap(),
+            fc
+        );
     }
 }
