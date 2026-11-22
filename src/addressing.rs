@@ -17,6 +17,18 @@ pub const CAN_11BIT_MAX: u32 = 0x7FF;
 /// The largest 29-bit CAN identifier (0x1FFFFFFF).
 pub const CAN_29BIT_MAX: u32 = 0x1FFF_FFFF;
 
+/// The lower ISO-reserved 11-bit CAN ID range, 0x7F4..=0x7F6 (Annex B, Table B.1).
+pub const RESERVED_CAN_IDS_LOW: core::ops::RangeInclusive<u32> = 0x7F4..=0x7F6;
+/// The upper ISO-reserved 11-bit CAN ID range, 0x7FA..=0x7FB (Annex B, Table B.1).
+pub const RESERVED_CAN_IDS_HIGH: core::ops::RangeInclusive<u32> = 0x7FA..=0x7FB;
+
+/// Whether `value` is an ISO 15765-2-reserved 11-bit CAN ID: 0x7F4..=0x7F6 or 0x7FA..=0x7FB, which
+/// Annex B reserves for future use in International Standards and a conformant node must not use.
+#[must_use]
+pub const fn is_reserved_can_id(value: u32) -> bool {
+    matches!(value, 0x7F4..=0x7F6 | 0x7FA..=0x7FB)
+}
+
 // ISO 15765-2 29-bit addressing (§10.3.3, §10.3.5): priority 110b in bits 28-26, bits 25-24 = 0,
 // then an 8-bit "PF" selector in bits 23-16, N_TA in 15-8, N_SA in 7-0.
 const PRIORITY_BASE_29BIT: u32 = 0x1800_0000;
@@ -77,6 +89,10 @@ fn check_11bit(value: u32, label: &'static str) -> Result<(), Error> {
     if value > CAN_11BIT_MAX {
         return Err(Error::CanIdRange { label, value });
     }
+    // Annex B reserves these 11-bit IDs for future use; a conformant node must not use one.
+    if is_reserved_can_id(value) {
+        return Err(Error::ReservedCanId { label, value });
+    }
     Ok(())
 }
 
@@ -88,10 +104,12 @@ pub struct NormalAddressing {
 }
 
 impl NormalAddressing {
-    /// Build a request/response pair, rejecting an identifier wider than 11 bits.
+    /// Build a request/response pair, rejecting an identifier wider than 11 bits or in an
+    /// ISO-reserved range (Annex B).
     ///
     /// # Errors
-    /// [`Error::CanIdRange`] if either identifier is above 0x7FF.
+    /// [`Error::CanIdRange`] if either identifier is above 0x7FF, or [`Error::ReservedCanId`] if
+    /// either is in an ISO-reserved range (0x7F4..=0x7F6 or 0x7FA..=0x7FB).
     pub fn new(request_id: u32, response_id: u32) -> Result<NormalAddressing, Error> {
         check_11bit(request_id, "request_id")?;
         check_11bit(response_id, "response_id")?;
@@ -117,7 +135,8 @@ impl NormalAddressing {
 /// The GM GMLAN physical response ID for a request ID (request + 0x400).
 ///
 /// # Errors
-/// [`Error::CanIdRange`] if the request ID, or the resulting response ID, is above 0x7FF.
+/// [`Error::CanIdRange`] if the request ID or the resulting response ID is above 0x7FF, or
+/// [`Error::ReservedCanId`] if either is in an ISO-reserved range (Annex B).
 pub fn gmlan_response_id(request_id: u32) -> Result<u32, Error> {
     check_11bit(request_id, "request_id")?;
     let response_id = request_id + GMLAN_RESPONSE_OFFSET;
@@ -128,7 +147,8 @@ pub fn gmlan_response_id(request_id: u32) -> Result<u32, Error> {
 /// The GM GMLAN flow/acceptance filter ID for a request ID (request + 0x300).
 ///
 /// # Errors
-/// [`Error::CanIdRange`] if the request ID, or the resulting filter ID, is above 0x7FF.
+/// [`Error::CanIdRange`] if the request ID or the resulting filter ID is above 0x7FF, or
+/// [`Error::ReservedCanId`] if either is in an ISO-reserved range (Annex B).
 pub fn gmlan_filter_id(request_id: u32) -> Result<u32, Error> {
     check_11bit(request_id, "request_id")?;
     let filter_id = request_id + GMLAN_FILTER_OFFSET;
@@ -139,7 +159,8 @@ pub fn gmlan_filter_id(request_id: u32) -> Result<u32, Error> {
 /// Build the request/response pair for a GM GMLAN request ID.
 ///
 /// # Errors
-/// [`Error::CanIdRange`] if the request ID, or the resulting response ID, is above 0x7FF.
+/// [`Error::CanIdRange`] if the request ID or the resulting response ID is above 0x7FF, or
+/// [`Error::ReservedCanId`] if either is in an ISO-reserved range (Annex B).
 pub fn gmlan_pair(request_id: u32) -> Result<NormalAddressing, Error> {
     NormalAddressing::new(request_id, gmlan_response_id(request_id)?)
 }
@@ -172,6 +193,34 @@ mod tests {
         assert_eq!(gmlan_filter_id(0x241), Ok(0x541));
         let pair = gmlan_pair(0x241).unwrap();
         assert_eq!((pair.request_id(), pair.response_id()), (0x241, 0x641));
+    }
+
+    #[test]
+    fn reserved_can_ids_are_rejected() {
+        // The two ISO-reserved ranges (Annex B, Table B.1).
+        for id in [0x7F4, 0x7F5, 0x7F6, 0x7FA, 0x7FB] {
+            assert!(is_reserved_can_id(id), "{id:#x}");
+            assert_eq!(
+                NormalAddressing::new(id, 0x7E8),
+                Err(Error::ReservedCanId {
+                    label: "request_id",
+                    value: id
+                })
+            );
+        }
+        // The identifiers just outside each range are usable.
+        for id in [0x7F3, 0x7F7, 0x7F9, 0x7FC] {
+            assert!(!is_reserved_can_id(id), "{id:#x}");
+            assert!(NormalAddressing::new(id, 0x7E8).is_ok());
+        }
+        // A GMLAN request whose +0x400 response lands in a reserved range is rejected.
+        assert_eq!(
+            gmlan_response_id(0x3FA), // 0x3FA + 0x400 = 0x7FA, reserved
+            Err(Error::ReservedCanId {
+                label: "response_id",
+                value: 0x7FA
+            })
+        );
     }
 
     #[test]
