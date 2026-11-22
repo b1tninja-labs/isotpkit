@@ -9,8 +9,8 @@ use alloc::vec::Vec;
 
 use crate::error::Error;
 use crate::pci::{
-    CF_DATA_MAX, ConsecutiveFrame, FF_DATA_LEN, FF_DL_12BIT_MAX, FirstFrame, SF_DL_MAX, SN_MAX,
-    SingleFrame,
+    CLASSIC_CAN_DL, ConsecutiveFrame, FF_DL_12BIT_MAX, FF_DL_32BIT_MAX, FirstFrame, SF_DL_MAX,
+    SN_MAX, SingleFrame, VALID_CAN_DL,
 };
 
 /// One of the three N_PDU types that carry message data (SF, FF, CF). `FlowControl` is not a
@@ -38,8 +38,9 @@ impl SegmentPdu {
 
     /// Encode the segment, choosing whether to pad and with which byte.
     ///
-    /// A `FirstFrame` always fills all 8 bytes, so `pad` and `padding` affect only a `SingleFrame`
-    /// or the last `ConsecutiveFrame` (CAN frame data optimization, §10.4.2).
+    /// A `FirstFrame` fills its frame exactly, so `pad` and `padding` affect only a `SingleFrame`
+    /// or the last `ConsecutiveFrame` (CAN frame data optimization, §10.4.2); a CAN FD frame is
+    /// padded up to its `CAN_DL` regardless (mandatory, §10.4.2.3).
     #[must_use]
     pub fn encode_with(&self, pad: bool, padding: u8) -> Vec<u8> {
         match self {
@@ -50,35 +51,65 @@ impl SegmentPdu {
     }
 }
 
-/// Split an application message into its ISO-TP N_PDU sequence.
+/// Split an application message into its ISO-TP N_PDU sequence for classic CAN (`TX_DL` = 8).
 ///
-/// A message of 1..=7 bytes becomes one `SingleFrame`. A longer message becomes a `FirstFrame`
-/// (carrying the 12-bit length and the first 6 bytes) followed by `ConsecutiveFrames` whose
-/// `SequenceNumber` starts at 1 and wraps 0xF → 0x0.
+/// A short message becomes one `SingleFrame`; a longer one becomes a `FirstFrame` (12-bit or
+/// 32-bit-escape length) followed by `ConsecutiveFrames` whose `SequenceNumber` starts at 1 and
+/// wraps 0xF → 0x0. Equivalent to [`segment_with_tx_dl`] with `tx_dl` = 8.
 ///
 /// # Errors
-/// [`Error::EmptyMessage`] for an empty message, and [`Error::MessageTooLong`] for one over 4095
-/// bytes (the 32-bit `FF_DL` escape is a planned row).
+/// [`Error::EmptyMessage`] for an empty message, and [`Error::MessageTooLong`] for one over
+/// 4294967295 bytes.
 pub fn segment(message: &[u8]) -> Result<Vec<SegmentPdu>, Error> {
+    segment_with_tx_dl(message, CLASSIC_CAN_DL)
+}
+
+/// Split an application message into its ISO-TP N_PDU sequence for a given `TX_DL`.
+///
+/// `tx_dl` is the configured CAN data length (§9.5): 8 for classic CAN, or a CAN FD value
+/// (12/16/20/24/32/48/64). The `SingleFrame`, `FirstFrame` and `ConsecutiveFrame` payload sizes,
+/// and the choice of the 12-bit or 32-bit `FF_DL` form, follow from it.
+///
+/// # Errors
+/// [`Error::EmptyMessage`] for an empty message, [`Error::InvalidCanDl`] for a `tx_dl` that is not
+/// a valid `CAN_DL`, and [`Error::MessageTooLong`] for a message over 4294967295 bytes.
+pub fn segment_with_tx_dl(message: &[u8], tx_dl: usize) -> Result<Vec<SegmentPdu>, Error> {
     if message.is_empty() {
         return Err(Error::EmptyMessage);
     }
-    if message.len() <= SF_DL_MAX {
+    if !VALID_CAN_DL.contains(&tx_dl) {
+        return Err(Error::InvalidCanDl(tx_dl));
+    }
+    if message.len() > FF_DL_32BIT_MAX {
+        return Err(Error::MessageTooLong(message.len()));
+    }
+    // SingleFrame payload capacity for this TX_DL, normal addressing: 7 on classic, TX_DL − 2 FD.
+    let sf_max = if tx_dl == CLASSIC_CAN_DL {
+        SF_DL_MAX
+    } else {
+        tx_dl - 2
+    };
+    if message.len() <= sf_max {
         return Ok(vec![SegmentPdu::Single(SingleFrame::new(
             message.to_vec(),
         )?)]);
     }
-    if message.len() > FF_DL_12BIT_MAX {
-        return Err(Error::MessageTooLong(message.len()));
-    }
+    // FirstFrame payload: TX_DL minus the N_PCI bytes (2 for the 12-bit form, 6 for the escape).
+    let ff_pci = if message.len() <= FF_DL_12BIT_MAX {
+        2
+    } else {
+        6
+    };
+    let ff_data_len = tx_dl - ff_pci;
     let mut pdus = vec![SegmentPdu::First(FirstFrame::new(
         message.len(),
-        message[..FF_DATA_LEN].to_vec(),
+        message[..ff_data_len].to_vec(),
     )?)];
+    let cf_data = tx_dl - 1;
     let mut sn: u8 = 1;
-    let mut offset = FF_DATA_LEN;
+    let mut offset = ff_data_len;
     while offset < message.len() {
-        let end = (offset + CF_DATA_MAX).min(message.len());
+        let end = (offset + cf_data).min(message.len());
         pdus.push(SegmentPdu::Consecutive(ConsecutiveFrame::new(
             sn,
             message[offset..end].to_vec(),
@@ -198,6 +229,7 @@ mod tests {
         reason = "test fixtures build byte patterns from loop indices"
     )]
     use super::*;
+    use crate::pci::{CF_DATA_MAX, FF_DATA_LEN};
 
     #[test]
     fn short_message_is_a_single_frame() {
@@ -291,9 +323,44 @@ mod tests {
             vec![0x03, 1, 2, 3, 0xAA, 0xAA, 0xAA, 0xAA]
         );
 
-        // The FirstFrame of a multi-frame message always fills 8 bytes, padding or not.
+        // The FirstFrame of a classic multi-frame message always fills 8 bytes, padding or not.
         let multi = segment(&[9; 20]).unwrap();
         assert_eq!(multi[0].encode_with(false, 0x00), multi[0].encode());
         assert_eq!(multi[0].encode().len(), 8);
+    }
+
+    #[test]
+    fn can_fd_segmentation_round_trips() {
+        // TX_DL 64: the FirstFrame and ConsecutiveFrames carry CAN FD payloads.
+        for len in [63usize, 100, 500, 4095, 4096, 10_000] {
+            let message: Vec<u8> = (0..len).map(|i| (i * 11 + 1) as u8).collect();
+            let pdus = segment_with_tx_dl(&message, 64).unwrap();
+            assert!(matches!(pdus[0], SegmentPdu::First(_)), "len {len}");
+            // Every encoded frame is a valid CAN FD CAN_DL (≤ 64).
+            for pdu in &pdus {
+                let frame = pdu.encode();
+                assert!(
+                    frame.len() <= 64
+                        && (frame.len() <= 8 || crate::pci::VALID_CAN_DL.contains(&frame.len()))
+                );
+            }
+            assert_eq!(reassemble(&pdus).unwrap(), message, "len {len}");
+        }
+        assert_eq!(segment_with_tx_dl(b"x", 10), Err(Error::InvalidCanDl(10)));
+    }
+
+    #[test]
+    fn classic_can_uses_the_32bit_escape_past_4095() {
+        // On classic CAN (TX_DL 8) a message over 4095 bytes uses the 32-bit FF_DL escape.
+        let message = vec![0x5Au8; 5000];
+        let pdus = segment(&message).unwrap();
+        match &pdus[0] {
+            SegmentPdu::First(ff) => {
+                assert_eq!(ff.length(), 5000);
+                assert_eq!(&ff.encode()[..2], &[0x10, 0x00], "32-bit escape marker");
+            }
+            other => panic!("expected a FirstFrame, got {other:?}"),
+        }
+        assert_eq!(reassemble(&pdus).unwrap(), message);
     }
 }

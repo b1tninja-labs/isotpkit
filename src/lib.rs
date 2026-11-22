@@ -2,7 +2,7 @@
 //!
 //! `isotpkit` is the transport/network layer of ISO 15765-2:2016 (`DoCAN`): it segments a
 //! UDS/GMLAN application message into CAN frames and reassembles it. It is the layer *under*
-//! an application-layer UDS codec such as the sibling `udsdiag`, and it does not depend on one.
+//! an application-layer UDS codec such as the sibling `udskit`, and it does not depend on one.
 //!
 //! The crate is *sans-I/O*: it has no bus, no sockets and no live timer loop. It encodes and
 //! decodes the four N_PDU types, runs the segmentation/reassembly state machine, and names the
@@ -14,9 +14,11 @@
 //!
 //! # Scope
 //!
-//! Classic CAN (`CAN_DL` at most 8 bytes) and normal addressing only. CAN FD, the `SingleFrame`
-//! and `FirstFrame` escape sequences, and extended/mixed addressing are planned rows that the
-//! decoder rejects rather than guessing.
+//! Classic CAN (`CAN_DL` 8) and CAN FD (`CAN_DL` up to 64) frames, normal addressing — including
+//! the `SingleFrame` escape (`SF_DL` > 7, in N_PCI byte #2) and the 32-bit `FirstFrame` escape
+//! (`FF_DL` > 4095). Extended/mixed addressing, a `FlowControl`-paced loop and a live timer loop
+//! are planned rows (see `ROADMAP.md`); the decoder rejects frames it does not implement rather
+//! than guessing.
 //!
 //! # Example
 //!

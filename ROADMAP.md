@@ -94,10 +94,19 @@ edit either file.
 | [ok] | The pyo3 module `isotpkit` exposes `segment`/`reassemble` (bytes frames), `describe`, `stmin_microseconds`/`encode_stmin` and `gmlan_response_id`/`gmlan_filter_id`, raising `ValueError` on bad input | `py/src/lib.rs`; `py/README.md` | `py/tests/test_isotpkit.py` (CI `bindings` job: maturin build + pytest) |
 | [ok] | The bindings are a separate crate (`std`, `unsafe` allowed) so the core stays `no_std` + unsafe-forbidden; default gates build only the core | `py/Cargo.toml`; `Cargo.toml` `[workspace]` | `.github/workflows/ci.yml` `bindings` job (clippy `-p isotpkit-py -D warnings`) |
 
+## CAN FD framing
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [ok] | CAN FD frames (CAN_DL > 8) and the receiver RX_DL determination | `src/pci.rs`; `docs/iso-map.md` §6, §9.5 | `segment::tests::can_fd_segmentation_round_trips`; `pci::tests::consecutive_frame_can_fd_payload` |
+| [ok] | The SingleFrame escape (SF_DL > 7, second PCI byte) for CAN FD | `docs/iso-map.md` §9.6.2 | `pci::tests::single_frame_can_fd_escape_roundtrip` |
+| [ok] | The 32-bit FirstFrame escape for FF_DL > 4095 | `docs/iso-map.md` §9.6.3 | `pci::tests::first_frame_32bit_escape_roundtrip` |
+| [ok] | TX_DL-based segmentation: `segment_with_tx_dl` sizes SF/FF/CF for each CAN FD TX_DL (12/16/20/24/32/48/64) and picks the 12-bit or 32-bit FF form | `src/segment.rs`; `docs/iso-map.md` §9.5 | `segment::tests::can_fd_segmentation_round_trips` |
+
 ## Planned (not built)
 
-`isotpkit` today is the classic-CAN (TX_DL = 8), normal-addressing, sans-I/O codec. These rows are
-the parts of ISO 15765-2:2016 it does **not** yet implement — the honest remainder of the spec.
+`isotpkit` today handles classic CAN and CAN FD frames with normal addressing, sans-I/O. These rows
+are the parts of ISO 15765-2:2016 it does **not** yet implement — the honest remainder of the spec.
 Where a frame cannot yet be handled the decoder rejects it (with the named test) rather than
 guessing; the rest are behaviours a fuller network layer would add. Each is grounded in the clause
 cited; `docs/iso-map.md` has the map.
@@ -106,10 +115,6 @@ cited; `docs/iso-map.md` has the map.
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
-| [open] | CAN FD frames (CAN_DL > 8) and the receiver RX_DL determination | `docs/iso-map.md` §6, §9.5 | none: not built; the decoder rejects CAN_DL > 8 (`pci::tests::decode_frame_dispatches_on_type`) |
-| [open] | TX_DL configuration: the CAN FD payload lengths 12/16/20/24/32/48/64 and the SF/FF boundaries they set; only TX_DL = 8 is built | `docs/iso-map.md` §9.5 | none: only TX_DL = 8 is built |
-| [open] | The SingleFrame escape (SF_DL > 7, second PCI byte) for CAN FD | `docs/iso-map.md` §9.6.2 | none: not built; the decoder rejects SF_DL 0 (`pci::tests::single_frame_decode_roundtrip`) |
-| [open] | The 32-bit FirstFrame escape for FF_DL > 4095 | `docs/iso-map.md` §9.6.3 | none: not built; the decoder rejects the escape (`pci::tests::first_frame_decode_roundtrip_and_rejects_short`) |
 | [open] | Extended, normal-fixed and mixed addressing (in-band address byte) | `docs/iso-map.md` §10.3.3–§10.3.5 | none: only normal addressing is built |
 | [open] | Reserved-CAN-ID handling: reject or avoid the ISO-reserved 11-bit ranges 0x7F4–0x7F6 and 0x7FA–0x7FB | `docs/iso-map.md` §B | none: `addressing` does not check reserved IDs |
 | [open] | DLC error handling: ignore a received frame whose CAN_DL is smaller than the N_PCI implies | `docs/iso-map.md` §10.4.3 | none: not modelled as the §10.4.3 rule |

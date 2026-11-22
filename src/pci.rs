@@ -1,10 +1,11 @@
-//! The four ISO-TP N_PDU types and their classic-CAN (8-byte) frame codec.
+//! The four ISO-TP N_PDU types and their classic-CAN and CAN FD frame codec.
 //!
-//! Grounded in ISO 15765-2:2016, §9.4 (Transport layer protocol data units) and §9.6 (Protocol
-//! control information specification). This module handles classic CAN, where the data-link
-//! length `CAN_DL` is at most 8 bytes, and normal addressing (no in-band address byte). CAN FD
-//! (`CAN_DL` > 8), the `SingleFrame` escape (`SF_DL` > 7) and the 32-bit `FirstFrame` escape
-//! (`FF_DL` > 4095) are planned rows and are rejected here rather than guessed.
+//! Grounded in ISO 15765-2:2016, §9.4 (Transport layer protocol data units), §9.5 (TX_DL/RX_DL)
+//! and §9.6 (Protocol control information specification). Normal addressing only (no in-band
+//! address byte). Classic CAN (`CAN_DL` ≤ 8) and CAN FD (`CAN_DL` one of 12/16/20/24/32/48/64)
+//! are both handled, including the `SingleFrame` escape (`SF_DL` > 7, in N_PCI byte #2) and the
+//! 32-bit `FirstFrame` escape (`FF_DL` > 4095, in N_PCI bytes #3..#6). Extended/mixed addressing
+//! is a planned row.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -14,20 +15,39 @@ use crate::flowcontrol::FlowStatus;
 
 /// Classic CAN maximum data length (`CAN_DL`).
 pub const CLASSIC_CAN_DL: usize = 8;
+/// CAN FD maximum data length (`CAN_DL`).
+pub const CAN_FD_MAX_DL: usize = 64;
+/// The valid `CAN_DL` / `RX_DL` values (§9.5.4, Table 7): classic 8, CAN FD 12..=64.
+pub const VALID_CAN_DL: [usize; 8] = [8, 12, 16, 20, 24, 32, 48, 64];
 /// Default frame padding value (ISO 15765-2:2016, §10.4.2).
 pub const DEFAULT_PADDING: u8 = 0xCC;
-/// `SingleFrame` payload maximum, normal addressing, `CAN_DL` = 8 (`CAN_DL` − 1).
+/// Largest classic `SingleFrame` payload, normal addressing (`CAN_DL` 8 − 1 N_PCI byte).
 pub const SF_DL_MAX: usize = 7;
-/// `FirstFrame` payload bytes on classic CAN (`CAN_DL` − 2 N_PCI bytes).
+/// Largest CAN FD `SingleFrame` payload, normal addressing (`CAN_DL` 64 − 2 N_PCI bytes).
+pub const SF_DL_FD_MAX: usize = 62;
+/// `FirstFrame` payload bytes on classic CAN (`CAN_DL` 8 − 2 N_PCI bytes).
 pub const FF_DATA_LEN: usize = 6;
-/// `ConsecutiveFrame` payload bytes (`CAN_DL` − 1 N_PCI byte).
+/// Largest classic `ConsecutiveFrame` payload (`CAN_DL` 8 − 1 N_PCI byte).
 pub const CF_DATA_MAX: usize = 7;
-/// Minimum `FF_DL` (`TX_DL` = 8, normal addressing) (§9.6.3).
+/// Largest CAN FD `ConsecutiveFrame` payload (`CAN_DL` 64 − 1 N_PCI byte).
+pub const CF_DATA_FD_MAX: usize = 63;
+/// Minimum `FF_DL` (`TX_DL` = 8, normal addressing) (§9.6.3, Table 14).
 pub const FF_DL_MIN: usize = 8;
 /// Largest `FF_DL` without the 32-bit escape, 4095 (§9.6.3).
 pub const FF_DL_12BIT_MAX: usize = 0xFFF;
+/// Largest `FF_DL` with the 32-bit escape, 4294967295 (§9.6.3).
+pub const FF_DL_32BIT_MAX: usize = u32::MAX as usize;
 /// `SequenceNumber` maximum; it wraps 0x0..=0xF (§9.6.4).
 pub const SN_MAX: u8 = 0xF;
+
+/// The smallest valid `CAN_DL` that holds `content` N_PCI+data bytes (content must be ≤ 64).
+fn can_dl_for(content: usize) -> usize {
+    VALID_CAN_DL
+        .iter()
+        .copied()
+        .find(|&dl| dl >= content)
+        .unwrap_or(CAN_FD_MAX_DL)
+}
 
 /// `N_PCItype`, the high nibble of N_PCI byte #1 (ISO 15765-2:2016, §9.6.1, Table 8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,18 +93,24 @@ fn require_frame(frame: &[u8]) -> Result<(), Error> {
     if frame.is_empty() {
         return Err(Error::EmptyFrame);
     }
-    if frame.len() > CLASSIC_CAN_DL {
+    if frame.len() > CAN_FD_MAX_DL {
         return Err(Error::FrameTooLong(frame.len()));
+    }
+    if frame.len() > CLASSIC_CAN_DL && !VALID_CAN_DL.contains(&frame.len()) {
+        return Err(Error::InvalidCanDl(frame.len()));
     }
     Ok(())
 }
 
-fn pad(mut frame: Vec<u8>, padding: u8) -> Vec<u8> {
-    frame.resize(CLASSIC_CAN_DL, padding);
+fn pad_to(mut frame: Vec<u8>, can_dl: usize, padding: u8) -> Vec<u8> {
+    frame.resize(can_dl, padding);
     frame
 }
 
 /// A `SingleFrame` (SF) N_PDU: an unsegmented message that fits one frame (§9.6.2).
+///
+/// A payload of 1..=7 bytes encodes as a classic SF (`SF_DL` in N_PCI byte #1); 8..=62 bytes
+/// encode as the CAN FD escape (byte #1 low nibble 0, `SF_DL` in byte #2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SingleFrame {
     data: Vec<u8>,
@@ -94,9 +120,9 @@ impl SingleFrame {
     /// Build a `SingleFrame` from its payload.
     ///
     /// # Errors
-    /// [`Error::SingleFrameLength`] if the payload is empty or longer than 7 bytes.
+    /// [`Error::SingleFrameLength`] if the payload is empty or longer than 62 bytes.
     pub fn new(data: Vec<u8>) -> Result<SingleFrame, Error> {
-        if data.is_empty() || data.len() > SF_DL_MAX {
+        if data.is_empty() || data.len() > SF_DL_FD_MAX {
             return Err(Error::SingleFrameLength(data.len()));
         }
         Ok(SingleFrame { data })
@@ -108,43 +134,51 @@ impl SingleFrame {
         &self.data
     }
 
-    /// `SF_DL`, the payload length (the low nibble of N_PCI byte #1).
+    /// `SF_DL`, the payload length.
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
-        reason = "`new` bounds the payload to 1..=7 bytes, which fits a u8"
+        reason = "`new` bounds the payload to 1..=62 bytes, which fits a u8"
     )]
     pub fn sf_dl(&self) -> u8 {
         self.data.len() as u8
     }
 
-    /// Encode to an on-wire frame, padded to 8 bytes with [`DEFAULT_PADDING`].
+    /// Encode to an on-wire frame with the default padding.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         self.encode_with(true, DEFAULT_PADDING)
     }
 
-    /// Encode to an on-wire frame, choosing whether to pad and with which byte.
+    /// Encode to an on-wire frame.
     ///
-    /// With `pad_frame` false the frame uses CAN frame data optimization (§10.4.2): a shortened
-    /// `CAN_DL` and no padding.
+    /// A classic SF (`SF_DL` ≤ 7) honours `pad_frame` (false uses CAN frame data optimization,
+    /// §10.4.2.2). A CAN FD SF (`SF_DL` > 7) is always padded up to the smallest valid `CAN_DL`
+    /// — padding is mandatory for CAN FD (§10.4.2.3).
     #[must_use]
     pub fn encode_with(&self, pad_frame: bool, padding: u8) -> Vec<u8> {
-        let mut frame = vec![(PciType::SingleFrame.value() << 4) | self.sf_dl()];
-        frame.extend_from_slice(&self.data);
-        if pad_frame {
-            pad(frame, padding)
+        if self.data.len() <= SF_DL_MAX {
+            let mut frame = vec![(PciType::SingleFrame.value() << 4) | self.sf_dl()];
+            frame.extend_from_slice(&self.data);
+            if pad_frame {
+                pad_to(frame, CLASSIC_CAN_DL, padding)
+            } else {
+                frame
+            }
         } else {
-            frame
+            let mut frame = vec![PciType::SingleFrame.value() << 4, self.sf_dl()];
+            frame.extend_from_slice(&self.data);
+            let can_dl = can_dl_for(frame.len());
+            pad_to(frame, can_dl, padding)
         }
     }
 
-    /// Decode an SF frame, validating `SF_DL` against the available data bytes.
+    /// Decode an SF frame (classic or CAN FD escape), validating `SF_DL`.
     ///
     /// # Errors
-    /// [`Error::WrongPciType`] if the frame is not an SF, [`Error::SingleFrameEscape`] for the
-    /// CAN FD escape (`SF_DL` 0), and [`Error::SingleFrameLengthExceedsFrame`] if `SF_DL` is
-    /// larger than the data the frame carries.
+    /// [`Error::WrongPciType`] if not an SF, [`Error::ReservedSingleFrame`] for `SF_DL` 0 on
+    /// classic CAN or a non-zero low nibble on a CAN FD escape, and
+    /// [`Error::SingleFrameLengthExceedsFrame`] if `SF_DL` does not fit the frame.
     pub fn decode(frame: &[u8]) -> Result<SingleFrame, Error> {
         require_frame(frame)?;
         if PciType::from_byte1(frame[0])? != PciType::SingleFrame {
@@ -153,22 +187,35 @@ impl SingleFrame {
                 byte1: frame[0],
             });
         }
-        let sf_dl = usize::from(frame[0] & 0x0F);
-        if sf_dl == 0 {
-            return Err(Error::SingleFrameEscape);
+        if frame.len() <= CLASSIC_CAN_DL {
+            let sf_dl = usize::from(frame[0] & 0x0F);
+            if sf_dl == 0 {
+                return Err(Error::ReservedSingleFrame);
+            }
+            let available = frame.len() - 1;
+            if sf_dl > available {
+                return Err(Error::SingleFrameLengthExceedsFrame { sf_dl, available });
+            }
+            SingleFrame::new(frame[1..=sf_dl].to_vec())
+        } else {
+            if frame[0] & 0x0F != 0 {
+                return Err(Error::ReservedSingleFrame);
+            }
+            let sf_dl = usize::from(frame[1]);
+            let available = frame.len() - 2;
+            if sf_dl <= SF_DL_MAX || sf_dl > available {
+                return Err(Error::SingleFrameLengthExceedsFrame { sf_dl, available });
+            }
+            SingleFrame::new(frame[2..2 + sf_dl].to_vec())
         }
-        let available = frame.len() - 1;
-        if sf_dl > available {
-            return Err(Error::SingleFrameLengthExceedsFrame { sf_dl, available });
-        }
-        SingleFrame::new(frame[1..=sf_dl].to_vec())
     }
 }
 
 /// A `FirstFrame` (FF) N_PDU: the first frame of a segmented message (§9.6.3).
 ///
-/// `length` is `FF_DL`, the full message length (12-bit, 8..=4095 here). `data` is the first 6
-/// payload bytes carried in the FF itself.
+/// `length` is `FF_DL`, the full message length. 8..=4095 encodes as the 12-bit form; 4096..=2³²−1
+/// encodes as the 32-bit escape (byte #1 low nibble 0, byte #2 0, `FF_DL` in bytes #3..#6). `data`
+/// is the first payload chunk; its length plus the N_PCI bytes must make a valid `CAN_DL`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FirstFrame {
     length: usize,
@@ -176,16 +223,17 @@ pub struct FirstFrame {
 }
 
 impl FirstFrame {
-    /// Build a `FirstFrame` from its `FF_DL` length and its first 6 payload bytes.
+    /// Build a `FirstFrame` from its `FF_DL` length and its first payload chunk.
     ///
     /// # Errors
-    /// [`Error::FirstFrameLength`] if `length` is outside 8..=4095, and
-    /// [`Error::FirstFrameDataLength`] if `data` is not exactly 6 bytes.
+    /// [`Error::FirstFrameLength`] if `length` is outside 8..=4294967295, and
+    /// [`Error::FirstFrameDataLength`] if `data` plus the N_PCI bytes is not a valid `CAN_DL`.
     pub fn new(length: usize, data: Vec<u8>) -> Result<FirstFrame, Error> {
-        if !(FF_DL_MIN..=FF_DL_12BIT_MAX).contains(&length) {
+        if !(FF_DL_MIN..=FF_DL_32BIT_MAX).contains(&length) {
             return Err(Error::FirstFrameLength(length));
         }
-        if data.len() != FF_DATA_LEN {
+        let pci_len = if length <= FF_DL_12BIT_MAX { 2 } else { 6 };
+        if !VALID_CAN_DL.contains(&(pci_len + data.len())) {
             return Err(Error::FirstFrameDataLength(data.len()));
         }
         Ok(FirstFrame { length, data })
@@ -197,31 +245,38 @@ impl FirstFrame {
         self.length
     }
 
-    /// The first 6 payload bytes.
+    /// The first payload chunk.
     #[must_use]
     pub fn data(&self) -> &[u8] {
         &self.data
     }
 
-    /// Encode to the on-wire FF frame: `0x1<FF_DL hi>` `<FF_DL lo>` then the 6 data bytes.
+    /// Encode to the on-wire FF frame (12-bit or 32-bit-escape form).
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
-        reason = "`length` is 8..=0xFFF, so the shifted and masked parts each fit a u8"
+        reason = "`length` is 8..=u32::MAX; the shifted/masked parts and the u32 cast each fit"
     )]
     pub fn encode(&self) -> Vec<u8> {
-        let byte1 = (PciType::FirstFrame.value() << 4) | ((self.length >> 8) & 0x0F) as u8;
-        let byte2 = (self.length & 0xFF) as u8;
-        let mut frame = vec![byte1, byte2];
+        let mut frame = if self.length <= FF_DL_12BIT_MAX {
+            vec![
+                (PciType::FirstFrame.value() << 4) | ((self.length >> 8) & 0x0F) as u8,
+                (self.length & 0xFF) as u8,
+            ]
+        } else {
+            let mut escape = vec![PciType::FirstFrame.value() << 4, 0u8];
+            escape.extend_from_slice(&(self.length as u32).to_be_bytes());
+            escape
+        };
         frame.extend_from_slice(&self.data);
         frame
     }
 
-    /// Decode an FF frame, rejecting the 32-bit escape and `CAN_DL` < 8.
+    /// Decode an FF frame (12-bit or 32-bit escape), rejecting `CAN_DL` < 8.
     ///
     /// # Errors
-    /// [`Error::FirstFrameTooShort`] for `CAN_DL` < 8, [`Error::WrongPciType`] if the frame is
-    /// not an FF, [`Error::FirstFrameEscape`] for the 32-bit escape, and
+    /// [`Error::FirstFrameTooShort`] for too few bytes, [`Error::WrongPciType`] if not an FF,
+    /// [`Error::FirstFrameEscapeUnderflow`] for an escape whose `FF_DL` ≤ 4095, and
     /// [`Error::FirstFrameLength`] if `FF_DL` is below `FF_DLmin`.
     pub fn decode(frame: &[u8]) -> Result<FirstFrame, Error> {
         require_frame(frame)?;
@@ -236,20 +291,25 @@ impl FirstFrame {
         }
         let high = usize::from(frame[0] & 0x0F);
         if high == 0 && frame[1] == 0 {
-            return Err(Error::FirstFrameEscape);
+            let length = u32::from_be_bytes([frame[2], frame[3], frame[4], frame[5]]) as usize;
+            if length <= FF_DL_12BIT_MAX {
+                return Err(Error::FirstFrameEscapeUnderflow(length));
+            }
+            FirstFrame::new(length, frame[6..].to_vec())
+        } else {
+            let length = (high << 8) | usize::from(frame[1]);
+            if length < FF_DL_MIN {
+                return Err(Error::FirstFrameLength(length));
+            }
+            FirstFrame::new(length, frame[2..].to_vec())
         }
-        let length = (high << 8) | usize::from(frame[1]);
-        if length < FF_DL_MIN {
-            return Err(Error::FirstFrameLength(length));
-        }
-        FirstFrame::new(length, frame[2..2 + FF_DATA_LEN].to_vec())
     }
 }
 
 /// A `ConsecutiveFrame` (CF) N_PDU: a following frame of a segmented message (§9.6.4).
 ///
-/// `data` holds the payload bytes as read from the frame (up to 7); the last CF of a message
-/// may carry fewer meaningful bytes, which the reassembler trims by `FF_DL`.
+/// `data` holds the payload bytes as read from the frame (up to 63 on CAN FD); the last CF of a
+/// message may carry fewer meaningful bytes, which the reassembler trims by `FF_DL`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsecutiveFrame {
     sn: u8,
@@ -261,12 +321,12 @@ impl ConsecutiveFrame {
     ///
     /// # Errors
     /// [`Error::SequenceNumberRange`] if `sn` is above 15, and [`Error::ConsecutiveFrameLength`]
-    /// if the payload is empty or longer than 7 bytes.
+    /// if the payload is empty or longer than 63 bytes.
     pub fn new(sn: u8, data: Vec<u8>) -> Result<ConsecutiveFrame, Error> {
         if sn > SN_MAX {
             return Err(Error::SequenceNumberRange(sn));
         }
-        if data.is_empty() || data.len() > CF_DATA_MAX {
+        if data.is_empty() || data.len() > CF_DATA_FD_MAX {
             return Err(Error::ConsecutiveFrameLength(data.len()));
         }
         Ok(ConsecutiveFrame { sn, data })
@@ -284,29 +344,35 @@ impl ConsecutiveFrame {
         &self.data
     }
 
-    /// Encode to an on-wire frame, padded to 8 bytes with [`DEFAULT_PADDING`].
+    /// Encode to an on-wire frame with the default padding.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         self.encode_with(true, DEFAULT_PADDING)
     }
 
-    /// Encode to an on-wire frame, choosing whether to pad and with which byte.
+    /// Encode to an on-wire frame. A classic CF (≤ 7 payload bytes) honours `pad_frame`; a CAN FD
+    /// CF is always padded up to the smallest valid `CAN_DL` (mandatory, §10.4.2.3).
     #[must_use]
     pub fn encode_with(&self, pad_frame: bool, padding: u8) -> Vec<u8> {
         let mut frame = vec![(PciType::ConsecutiveFrame.value() << 4) | self.sn];
         frame.extend_from_slice(&self.data);
-        if pad_frame {
-            pad(frame, padding)
+        if frame.len() <= CLASSIC_CAN_DL {
+            if pad_frame {
+                pad_to(frame, CLASSIC_CAN_DL, padding)
+            } else {
+                frame
+            }
         } else {
-            frame
+            let can_dl = can_dl_for(frame.len());
+            pad_to(frame, can_dl, padding)
         }
     }
 
     /// Decode a CF frame into its `SequenceNumber` and payload bytes (padding included).
     ///
     /// # Errors
-    /// [`Error::WrongPciType`] if the frame is not a CF, and [`Error::ConsecutiveFrameLength`]
-    /// if it carries no data byte.
+    /// [`Error::WrongPciType`] if not a CF, and [`Error::ConsecutiveFrameLength`] if it carries no
+    /// data byte.
     pub fn decode(frame: &[u8]) -> Result<ConsecutiveFrame, Error> {
         require_frame(frame)?;
         if PciType::from_byte1(frame[0])? != PciType::ConsecutiveFrame {
@@ -368,7 +434,7 @@ impl FlowControl {
             self.stmin,
         ];
         if pad_frame {
-            pad(frame, padding)
+            pad_to(frame, CLASSIC_CAN_DL, padding)
         } else {
             frame
         }
@@ -409,11 +475,11 @@ pub enum NPdu {
     Flow(FlowControl),
 }
 
-/// Decode any classic-CAN ISO-TP frame into its N_PDU, dispatched on `N_PCItype`.
+/// Decode any classic-CAN or CAN FD ISO-TP frame into its N_PDU, dispatched on `N_PCItype`.
 ///
 /// # Errors
 /// Any [`Error`] the per-type decoder returns, including [`Error::ReservedPciType`] for the
-/// reserved `N_PCItype` range.
+/// reserved `N_PCItype` range and [`Error::InvalidCanDl`] for an invalid frame length.
 pub fn decode_frame(frame: &[u8]) -> Result<NPdu, Error> {
     require_frame(frame)?;
     match PciType::from_byte1(frame[0])? {
@@ -426,7 +492,12 @@ pub fn decode_frame(frame: &[u8]) -> Result<NPdu, Error> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::cast_possible_truncation,
+        reason = "test fixtures build byte patterns from loop indices"
+    )]
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn reserved_pci_type_is_rejected() {
@@ -453,9 +524,10 @@ mod tests {
     fn single_frame_decode_roundtrip() {
         let sf = SingleFrame::new(vec![0x3E, 0x00]).unwrap();
         assert_eq!(SingleFrame::decode(&sf.encode()).unwrap(), sf);
+        // Classic SF_DL 0 is reserved.
         assert_eq!(
             SingleFrame::decode(&[0x00, 1]),
-            Err(Error::SingleFrameEscape)
+            Err(Error::ReservedSingleFrame)
         );
         assert_eq!(
             SingleFrame::decode(&[0x05, 1, 2]),
@@ -463,6 +535,31 @@ mod tests {
                 sf_dl: 5,
                 available: 2
             })
+        );
+    }
+
+    #[test]
+    fn single_frame_can_fd_escape_roundtrip() {
+        // 20-byte payload needs the CAN FD escape: SF_DL in byte #2, CAN_DL rounds up to 24.
+        let payload: Vec<u8> = (0..20u8).collect();
+        let sf = SingleFrame::new(payload.clone()).unwrap();
+        let frame = sf.encode();
+        assert_eq!(frame[0], 0x00, "byte #1 low nibble is 0 for the escape");
+        assert_eq!(frame[1], 20, "SF_DL is in byte #2");
+        assert_eq!(frame.len(), 24, "padded up to a valid CAN FD CAN_DL");
+        assert_eq!(SingleFrame::decode(&frame).unwrap(), sf);
+        // A CAN FD SF whose byte #1 low nibble is non-zero is reserved.
+        let mut bad = frame.clone();
+        bad[0] = 0x01;
+        assert_eq!(SingleFrame::decode(&bad), Err(Error::ReservedSingleFrame));
+    }
+
+    #[test]
+    fn single_frame_rejects_invalid_can_dl() {
+        // 10 bytes is not a valid CAN_DL (between 8 and 12).
+        assert_eq!(
+            SingleFrame::decode(&[0x00, 8, 1, 2, 3, 4, 5, 6, 7, 8]),
+            Err(Error::InvalidCanDl(10))
         );
     }
 
@@ -484,9 +581,23 @@ mod tests {
             FirstFrame::decode(&[0x10, 0x08, 1, 2, 3, 4]),
             Err(Error::FirstFrameTooShort(6))
         );
+    }
+
+    #[test]
+    fn first_frame_32bit_escape_roundtrip() {
+        // FF_DL 100_000 needs the 32-bit escape; on classic CAN the FF carries 2 data bytes.
+        let ff = FirstFrame::new(100_000, vec![0xAA, 0xBB]).unwrap();
+        let frame = ff.encode();
+        assert_eq!(&frame[..2], &[0x10, 0x00], "escape marker");
         assert_eq!(
-            FirstFrame::decode(&[0x10, 0x00, 0, 0, 0, 0, 0, 0]),
-            Err(Error::FirstFrameEscape)
+            u32::from_be_bytes([frame[2], frame[3], frame[4], frame[5]]),
+            100_000
+        );
+        assert_eq!(FirstFrame::decode(&frame).unwrap(), ff);
+        // An escape carrying FF_DL <= 4095 must use the 12-bit form.
+        assert_eq!(
+            FirstFrame::decode(&[0x10, 0x00, 0, 0, 0x01, 0x00, 1, 2]),
+            Err(Error::FirstFrameEscapeUnderflow(256))
         );
     }
 
@@ -497,6 +608,20 @@ mod tests {
         let decoded = ConsecutiveFrame::decode(&cf.encode()).unwrap();
         assert_eq!(decoded.sn(), 5);
         assert_eq!(&decoded.data()[..3], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn consecutive_frame_can_fd_payload() {
+        // 20 payload bytes -> CAN_DL rounds up to 24 (1 PCI + 20 data = 21 -> 24).
+        let data: Vec<u8> = (0..20u8).collect();
+        let cf = ConsecutiveFrame::new(3, data.clone()).unwrap();
+        let frame = cf.encode();
+        assert_eq!(frame[0], 0x23);
+        assert_eq!(frame.len(), 24);
+        assert_eq!(
+            ConsecutiveFrame::decode(&frame).unwrap().data()[..20],
+            data[..]
+        );
     }
 
     #[test]
@@ -522,9 +647,6 @@ mod tests {
         let sf = SingleFrame::new(vec![0x7F]).unwrap();
         assert_eq!(decode_frame(&sf.encode()).unwrap(), NPdu::Single(sf));
         assert_eq!(decode_frame(&[]), Err(Error::EmptyFrame));
-        assert_eq!(
-            decode_frame(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
-            Err(Error::FrameTooLong(9))
-        );
+        assert_eq!(decode_frame(&[0; 65]), Err(Error::FrameTooLong(65)));
     }
 }
