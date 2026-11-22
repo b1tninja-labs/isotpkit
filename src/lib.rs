@@ -38,6 +38,7 @@ pub mod addressing;
 pub mod cli;
 pub mod flowcontrol;
 pub mod pci;
+pub mod result;
 pub mod segment;
 pub mod session;
 pub mod timing;
@@ -45,6 +46,7 @@ pub mod timing;
 mod error;
 
 pub use error::Error;
+pub use result::NResult;
 
 /// The name of this crate, as Cargo knows it.
 #[must_use]
