@@ -5,9 +5,10 @@
 //! an application-layer UDS codec such as the sibling `udskit`, and it does not depend on one.
 //!
 //! The crate is *sans-I/O*: it has no bus, no sockets and no live timer loop. It encodes and
-//! decodes the four N_PDU types, runs the segmentation/reassembly state machine, and names the
-//! network-layer timing parameters as constants. A `FlowControl`-paced sender/receiver and a
-//! live timer loop are deliberately out of scope (see `ROADMAP.md`).
+//! decodes the four N_PDU types, runs the segmentation/reassembly state machine, names the
+//! network-layer timing parameters as constants, and paces a sender/receiver in the [`session`]
+//! module by *emitting* actions (send this frame, wait for a `FlowControl`, wait this `STmin`)
+//! rather than running timers. A live timer loop is out of scope (see `ROADMAP.md`).
 //!
 //! Every frame-format and parameter detail is grounded in ISO 15765-2:2016, read through the
 //! `primarysource` `iso_*` tools; `docs/iso-map.md` is the clause-by-clause map.
@@ -38,6 +39,7 @@ pub mod cli;
 pub mod flowcontrol;
 pub mod pci;
 pub mod segment;
+pub mod session;
 pub mod timing;
 
 mod error;
