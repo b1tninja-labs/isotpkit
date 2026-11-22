@@ -35,6 +35,19 @@ impl SegmentPdu {
             SegmentPdu::Consecutive(cf) => cf.encode(),
         }
     }
+
+    /// Encode the segment, choosing whether to pad and with which byte.
+    ///
+    /// A `FirstFrame` always fills all 8 bytes, so `pad` and `padding` affect only a `SingleFrame`
+    /// or the last `ConsecutiveFrame` (CAN frame data optimization, §10.4.2).
+    #[must_use]
+    pub fn encode_with(&self, pad: bool, padding: u8) -> Vec<u8> {
+        match self {
+            SegmentPdu::Single(sf) => sf.encode_with(pad, padding),
+            SegmentPdu::First(ff) => ff.encode(),
+            SegmentPdu::Consecutive(cf) => cf.encode_with(pad, padding),
+        }
+    }
 }
 
 /// Split an application message into its ISO-TP N_PDU sequence.
@@ -267,5 +280,20 @@ mod tests {
             r.feed(&SegmentPdu::Consecutive(cf)),
             Err(Error::ConsecutiveFrameWithoutFirstFrame)
         );
+    }
+
+    #[test]
+    fn segment_pdu_encode_with_controls_padding() {
+        let single = &segment(&[1, 2, 3]).unwrap()[0];
+        assert_eq!(single.encode_with(false, 0x00), vec![0x03, 1, 2, 3]);
+        assert_eq!(
+            single.encode_with(true, 0xAA),
+            vec![0x03, 1, 2, 3, 0xAA, 0xAA, 0xAA, 0xAA]
+        );
+
+        // The FirstFrame of a multi-frame message always fills 8 bytes, padding or not.
+        let multi = segment(&[9; 20]).unwrap();
+        assert_eq!(multi[0].encode_with(false, 0x00), multi[0].encode());
+        assert_eq!(multi[0].encode().len(), 8);
     }
 }
