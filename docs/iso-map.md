@@ -44,6 +44,19 @@ as 9.6.4.3 live inside those sections and are named in prose where they matter.
 | Real timeout no later than the specified value + 50 % | §9.8.1 | `timing::TIMEOUT_TOLERANCE` |
 | N_WFTmax: max consecutive FC.WAIT, local, not on the wire; 0 => CTS only | §9.7 | `timing` module note |
 
+## CAN FD framing (implemented)
+
+Grounded additions from the CAN FD work; these are built in `pci` and `segment`.
+
+| Detail | Clause | Where in code |
+|---|---|---|
+| Valid `CAN_DL` / `RX_DL` values: 8 (classic), 12/16/20/24/32/48/64 (CAN FD); RX_DL = the FF's CAN_DL | §9.5.4, Table 7 | `pci::VALID_CAN_DL`, `pci::decode_frame` |
+| TX_DL configuration values 8 and 12/16/20/24/32/48/64 (CAN_DL ≤ TX_DL), driving SF/FF/CF sizing | §9.5.1, Table 6 | `segment::segment_with_tx_dl` |
+| SingleFrame escape (CAN_DL > 8): byte #1 low nibble 0, SF_DL in byte #2, 8 ≤ SF_DL ≤ CAN_DL − 2 (normal) | §9.6.2, Tables 11, 13 | `pci::SingleFrame` |
+| FirstFrame 32-bit escape (FF_DL > 4095): byte #1 low nibble 0, byte #2 0, FF_DL in bytes #3 (MSB)..#6 (LSB) | §9.6.3, Tables 14, 15 | `pci::FirstFrame` |
+| ConsecutiveFrame carries up to CAN_DL − 1 bytes on CAN FD | §9.6.4 | `pci::ConsecutiveFrame` |
+| Mandatory padding of CAN FD frames to the next valid CAN_DL (value 0xCC) | §10.4.2.3 | `pci` encoders |
+
 ## Spec surface not yet implemented (ROADMAP `[open]` rows)
 
 The clauses below are part of ISO 15765-2:2016 but are not implemented in `isotpkit` today; each is a
@@ -55,8 +68,7 @@ remaining spec, and so a later implementation has the clause to read first.
 | Network-layer service primitives: N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters | §8.2 | planned |
 | Service data unit parameters: Mtype, N_AI, Length, MessageData, Parameter, N_Result, Result_ChangeParameter | §8.3 | planned |
 | `<N_Result>` enumeration — N_OK, N_TIMEOUT_A, N_TIMEOUT_Bs, N_TIMEOUT_Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR; the first error in that list is the one reported | §8.3.7 | planned |
-| TX_DL configuration: valid values 8 (classic/FD) and 12/16/20/24/32/48/64 (FD only); CAN_DL ≤ TX_DL | §9.5.1, Table 6 | planned (only TX_DL = 8 built) |
-| Receiver RX_DL determination; creating/verifying frames by N_TAtype and TX_DL | §9.5.2–§9.5.4 | planned |
+| Creating/verifying received frames by N_TAtype, and the §9.6.4.1 rule that every CF's CAN_DL match RX_DL | §9.5.2–§9.5.3, §9.6.4.1 | planned (sender-side TX_DL sizing is built; receive-side CAN_DL verification is not) |
 | N_WFTmax overrun → N_WFT_OVRN (receiver), seen by the sender as N_TIMEOUT_Bs | §9.8.4 | planned |
 | Unexpected arrival of N_PDU — Table 23 ignore/terminate rules over NWL status, half/full duplex and N_AI; terminate + N_UNEXP_PDU on a receive in progress | §9.8.3 | planned |
 | Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
