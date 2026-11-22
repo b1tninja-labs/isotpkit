@@ -94,15 +94,35 @@ edit either file.
 | [ok] | The pyo3 module `isotpkit` exposes `segment`/`reassemble` (bytes frames), `describe`, `stmin_microseconds`/`encode_stmin` and `gmlan_response_id`/`gmlan_filter_id`, raising `ValueError` on bad input | `py/src/lib.rs`; `py/README.md` | `py/tests/test_isotpkit.py` (CI `bindings` job: maturin build + pytest) |
 | [ok] | The bindings are a separate crate (`std`, `unsafe` allowed) so the core stays `no_std` + unsafe-forbidden; default gates build only the core | `py/Cargo.toml`; `Cargo.toml` `[workspace]` | `.github/workflows/ci.yml` `bindings` job (clippy `-p isotpkit-py -D warnings`) |
 
-## Planned (decoder rejects, not built)
+## Planned (not built)
+
+`isotpkit` today is the classic-CAN (TX_DL = 8), normal-addressing, sans-I/O codec. These rows are
+the parts of ISO 15765-2:2016 it does **not** yet implement — the honest remainder of the spec.
+Where a frame cannot yet be handled the decoder rejects it (with the named test) rather than
+guessing; the rest are behaviours a fuller network layer would add. Each is grounded in the clause
+cited; `docs/iso-map.md` has the map.
+
+### Frame formats and addressing
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
 | [open] | CAN FD frames (CAN_DL > 8) and the receiver RX_DL determination | `docs/iso-map.md` §6, §9.5 | none: not built; the decoder rejects CAN_DL > 8 (`pci::tests::decode_frame_dispatches_on_type`) |
+| [open] | TX_DL configuration: the CAN FD payload lengths 12/16/20/24/32/48/64 and the SF/FF boundaries they set; only TX_DL = 8 is built | `docs/iso-map.md` §9.5 | none: only TX_DL = 8 is built |
 | [open] | The SingleFrame escape (SF_DL > 7, second PCI byte) for CAN FD | `docs/iso-map.md` §9.6.2 | none: not built; the decoder rejects SF_DL 0 (`pci::tests::single_frame_decode_roundtrip`) |
 | [open] | The 32-bit FirstFrame escape for FF_DL > 4095 | `docs/iso-map.md` §9.6.3 | none: not built; the decoder rejects the escape (`pci::tests::first_frame_decode_roundtrip_and_rejects_short`) |
 | [open] | Extended, normal-fixed and mixed addressing (in-band address byte) | `docs/iso-map.md` §10.3.3–§10.3.5 | none: only normal addressing is built |
-| [open] | A FlowControl-paced sender/receiver loop (BS blocks, WAIT, N_WFTmax) | `docs/iso-map.md` §9.6.5 | none: needs a bus; this crate is sans-I/O |
+| [open] | Reserved-CAN-ID handling: reject or avoid the ISO-reserved 11-bit ranges 0x7F4–0x7F6 and 0x7FA–0x7FB | `docs/iso-map.md` §B | none: `addressing` does not check reserved IDs |
+| [open] | DLC error handling: ignore a received frame whose CAN_DL is smaller than the N_PCI implies | `docs/iso-map.md` §10.4.3 | none: not modelled as the §10.4.3 rule |
+
+### Network-layer behaviour
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [open] | A FlowControl-paced sender/receiver loop (BS blocks, WAIT, N_WFTmax) | `docs/iso-map.md` §9.6.5, §9.7, §9.8.4 | none: needs a bus; this crate is sans-I/O (the N_WFT_OVRN overrun of §9.8.4 lives here) |
+| [open] | Unexpected-N_PDU handling (Table 23): the ignore/terminate state machine over NWL status, half/full duplex and N_AI, raising N_UNEXP_PDU | `docs/iso-map.md` §9.8.3 | none: the reassembler only rejects a mid-message SF/FF and an orphan CF |
+| [open] | Interleaving: reassemble segmented messages on distinct N_AI in parallel (multi-channel), as a gateway needs | `docs/iso-map.md` §9.9 | none: `Reassembler` is single-channel |
+| [open] | The `<N_Result>` outcome codes (N_OK, N_TIMEOUT_A/Bs/Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR) with the first-in-list priority ordering | `docs/iso-map.md` §8.3 | none: `Error` is the crate's own enum, not the N_Result model |
+| [open] | The network-layer service primitives (N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters) and their SDU parameters | `docs/iso-map.md` §8.2, §8.3 | none: no service interface is built |
 | [open] | Consolidate with `fakeobd`'s `isotp` crate into one canonical ISO-TP (see Overlap) | `docs/sources.md` | none: a cross-repo decision, deferred |
 
 ## Non-goals

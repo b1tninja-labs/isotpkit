@@ -44,6 +44,25 @@ as 9.6.4.3 live inside those sections and are named in prose where they matter.
 | Real timeout no later than the specified value + 50 % | §9.8.1 | `timing::TIMEOUT_TOLERANCE` |
 | N_WFTmax: max consecutive FC.WAIT, local, not on the wire; 0 => CTS only | §9.7 | `timing` module note |
 
+## Spec surface not yet implemented (ROADMAP `[open]` rows)
+
+The clauses below are part of ISO 15765-2:2016 but are not implemented in `isotpkit` today; each is a
+`[open]` row in `ROADMAP.md`. They are recorded here, grounded, so the matrix is honest about the
+remaining spec, and so a later implementation has the clause to read first.
+
+| Detail | Clause | Status |
+|---|---|---|
+| Network-layer service primitives: N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters | §8.2 | planned |
+| Service data unit parameters: Mtype, N_AI, Length, MessageData, Parameter, N_Result, Result_ChangeParameter | §8.3 | planned |
+| `<N_Result>` enumeration — N_OK, N_TIMEOUT_A, N_TIMEOUT_Bs, N_TIMEOUT_Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR; the first error in that list is the one reported | §8.3.7 | planned |
+| TX_DL configuration: valid values 8 (classic/FD) and 12/16/20/24/32/48/64 (FD only); CAN_DL ≤ TX_DL | §9.5.1, Table 6 | planned (only TX_DL = 8 built) |
+| Receiver RX_DL determination; creating/verifying frames by N_TAtype and TX_DL | §9.5.2–§9.5.4 | planned |
+| N_WFTmax overrun → N_WFT_OVRN (receiver), seen by the sender as N_TIMEOUT_Bs | §9.8.4 | planned |
+| Unexpected arrival of N_PDU — Table 23 ignore/terminate rules over NWL status, half/full duplex and N_AI; terminate + N_UNEXP_PDU on a receive in progress | §9.8.3 | planned |
+| Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
+| DLC error handling: a CAN frame with DLC smaller than the N_PCI implies is ignored | §10.4.3 | planned |
+| ISO-reserved 11-bit CAN IDs: 0x7F4–0x7F6 and 0x7FA–0x7FB | §B (Annex B), Table B.1 | planned |
+
 ## Citation
 
 Clause text was read with `iso_read` / `iso_cite` on `iso:15765-2@2016`. Canonical form, e.g.:
