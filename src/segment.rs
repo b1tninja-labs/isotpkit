@@ -9,8 +9,8 @@ use alloc::vec::Vec;
 
 use crate::error::Error;
 use crate::pci::{
-    CLASSIC_CAN_DL, ConsecutiveFrame, FF_DL_12BIT_MAX, FF_DL_32BIT_MAX, FirstFrame, SF_DL_MAX,
-    SN_MAX, SingleFrame, VALID_CAN_DL,
+    Addressing, CLASSIC_CAN_DL, ConsecutiveFrame, FF_DL_12BIT_MAX, FF_DL_32BIT_MAX, FirstFrame,
+    NPdu, SF_DL_MAX, SN_MAX, SingleFrame, VALID_CAN_DL, encode_addressed,
 };
 
 /// One of the three N_PDU types that carry message data (SF, FF, CF). `FlowControl` is not a
@@ -48,6 +48,18 @@ impl SegmentPdu {
             SegmentPdu::First(ff) => ff.encode(),
             SegmentPdu::Consecutive(cf) => cf.encode_with(pad, padding),
         }
+    }
+
+    /// Encode the segment for a given addressing format (§10.3), prepending the in-band address
+    /// byte for extended/mixed addressing. Pair with [`segment_addressed`] so the sizes fit.
+    #[must_use]
+    pub fn encode_addressed(&self, addressing: Addressing, padding: u8) -> Vec<u8> {
+        let npdu = match self {
+            SegmentPdu::Single(sf) => NPdu::Single(sf.clone()),
+            SegmentPdu::First(ff) => NPdu::First(ff.clone()),
+            SegmentPdu::Consecutive(cf) => NPdu::Consecutive(cf.clone()),
+        };
+        encode_addressed(&npdu, addressing, padding)
     }
 }
 
@@ -106,6 +118,65 @@ pub fn segment_with_tx_dl(message: &[u8], tx_dl: usize) -> Result<Vec<SegmentPdu
         message[..ff_data_len].to_vec(),
     )?)];
     let cf_data = tx_dl - 1;
+    let mut sn: u8 = 1;
+    let mut offset = ff_data_len;
+    while offset < message.len() {
+        let end = (offset + cf_data).min(message.len());
+        pdus.push(SegmentPdu::Consecutive(ConsecutiveFrame::new(
+            sn,
+            message[offset..end].to_vec(),
+        )?));
+        sn = (sn + 1) & SN_MAX;
+        offset = end;
+    }
+    Ok(pdus)
+}
+
+/// Split a message into N_PDUs sized for a given `TX_DL` and addressing format (§10.3).
+///
+/// Like [`segment_with_tx_dl`], but an in-band address byte (extended/mixed) costs one payload
+/// byte per frame. Encode each result with [`SegmentPdu::encode_addressed`] using the same
+/// `addressing`.
+///
+/// # Errors
+/// [`Error::EmptyMessage`], [`Error::InvalidCanDl`] for a bad `tx_dl`, and [`Error::MessageTooLong`].
+pub fn segment_addressed(
+    message: &[u8],
+    tx_dl: usize,
+    addressing: Addressing,
+) -> Result<Vec<SegmentPdu>, Error> {
+    if message.is_empty() {
+        return Err(Error::EmptyMessage);
+    }
+    if !VALID_CAN_DL.contains(&tx_dl) {
+        return Err(Error::InvalidCanDl(tx_dl));
+    }
+    if message.len() > FF_DL_32BIT_MAX {
+        return Err(Error::MessageTooLong(message.len()));
+    }
+    let header = addressing.header_len();
+    let sf_base = if tx_dl == CLASSIC_CAN_DL {
+        SF_DL_MAX
+    } else {
+        tx_dl - 2
+    };
+    let sf_max = sf_base - header;
+    if message.len() <= sf_max {
+        return Ok(vec![SegmentPdu::Single(SingleFrame::new(
+            message.to_vec(),
+        )?)]);
+    }
+    let ff_pci = if message.len() <= FF_DL_12BIT_MAX {
+        2
+    } else {
+        6
+    };
+    let ff_data_len = tx_dl - header - ff_pci;
+    let mut pdus = vec![SegmentPdu::First(FirstFrame::new(
+        message.len(),
+        message[..ff_data_len].to_vec(),
+    )?)];
+    let cf_data = tx_dl - header - 1;
     let mut sn: u8 = 1;
     let mut offset = ff_data_len;
     while offset < message.len() {
@@ -362,5 +433,29 @@ mod tests {
             other => panic!("expected a FirstFrame, got {other:?}"),
         }
         assert_eq!(reassemble(&pdus).unwrap(), message);
+    }
+
+    #[test]
+    fn extended_addressing_segmentation_round_trips() {
+        let addr = Addressing::Extended(0xF1);
+        for len in [6usize, 7, 50, 300] {
+            let message: Vec<u8> = (0..len).map(|i| (i * 5 + 1) as u8).collect();
+            let pdus = segment_addressed(&message, CLASSIC_CAN_DL, addr).unwrap();
+            // Encode each frame with its address byte, then decode it back and reassemble.
+            let decoded: Vec<SegmentPdu> = pdus
+                .iter()
+                .map(|pdu| {
+                    let frame = pdu.encode_addressed(addr, 0xCC);
+                    assert_eq!(frame[0], 0xF1, "address byte leads (len {len})");
+                    match crate::pci::decode_addressed(&frame, addr).unwrap() {
+                        NPdu::Single(sf) => SegmentPdu::Single(sf),
+                        NPdu::First(ff) => SegmentPdu::First(ff),
+                        NPdu::Consecutive(cf) => SegmentPdu::Consecutive(cf),
+                        NPdu::Flow(_) => unreachable!(),
+                    }
+                })
+                .collect();
+            assert_eq!(reassemble(&decoded).unwrap(), message, "len {len}");
+        }
     }
 }
