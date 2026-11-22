@@ -39,6 +39,7 @@ as 9.6.4.3 live inside those sections and are named in prose where they matter.
 | Normal-fixed 29-bit CAN ID: 0x18DA (physical) / 0x18DB (functional), N_TA in 15–8, N_SA in 7–0 | §10.3.3, Tables 26–27 | `addressing::normal_fixed_id` |
 | Mixed 29-bit CAN ID: 0x18CE (physical) / 0x18CD (functional), N_TA in 15–8, N_SA in 7–0 | §10.3.5, Tables 30–31 | `addressing::mixed_id_29bit` |
 | FF_DLmin for TX_DL=8: 8 (normal), 7 (extended/mixed) | §9.6.3, Table 14 | `pci::FF_DL_MIN`, `pci::FF_DL_MIN_EXTENDED` |
+| ISO-reserved 11-bit CAN IDs 0x7F4–0x7F6 and 0x7FA–0x7FB rejected for normal addressing | §B (Annex B), Table B.1 | `addressing::is_reserved_can_id`, `addressing::NormalAddressing::new` |
 
 ## Timing (named only — no bus, no timer loop)
 
@@ -121,7 +122,6 @@ remaining spec, and so a later implementation has the clause to read first.
 | Detail | Clause | Status |
 |---|---|---|
 | Verifying a received frame's CAN type by N_TAtype (CLASSICAL CAN vs CAN FD filtering) | §9.5.2–§9.5.3 | planned (the receive-side CAN_DL/RX_DL check of §9.6.4.1 is built; frame-type filtering needs the CAN frame's type, which the sans-I/O byte slice does not carry) |
-| ISO-reserved 11-bit CAN IDs: 0x7F4–0x7F6 and 0x7FA–0x7FB | §B (Annex B), Table B.1 | planned |
 
 ## Citation
 

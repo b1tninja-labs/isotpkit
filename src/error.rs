@@ -62,6 +62,13 @@ pub enum Error {
         /// The offending value.
         value: u32,
     },
+    /// A CAN identifier falls in an ISO-reserved 11-bit range, 0x7F4..=0x7F6 or 0x7FA..=0x7FB (Annex B).
+    ReservedCanId {
+        /// Which identifier was reserved.
+        label: &'static str,
+        /// The offending value.
+        value: u32,
+    },
     /// An empty application message was given to the segmenter.
     EmptyMessage,
     /// A message longer than the 32-bit `FF_DL` maximum of 4294967295 bytes.
@@ -141,6 +148,9 @@ impl fmt::Display for Error {
             }
             Error::CanIdRange { label, value } => {
                 write!(f, "{label} {value:#x} is outside the 11-bit range 0..=0x7ff")
+            }
+            Error::ReservedCanId { label, value } => {
+                write!(f, "{label} {value:#x} is an ISO-reserved CAN ID (0x7f4..=0x7f6 or 0x7fa..=0x7fb, Annex B)")
             }
             Error::EmptyMessage => f.write_str("cannot segment an empty message"),
             Error::MessageTooLong(len) => {
