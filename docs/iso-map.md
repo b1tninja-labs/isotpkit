@@ -73,6 +73,20 @@ The `session` module paces a sender/receiver by emitting actions; it owns no bus
 | N_WFTmax: the receiver may send at most that many FC.WAIT in a row, then N_WFT_OVRN | §9.7, §9.8.4 | `session::RxSession::request_wait` |
 | Unexpected N_PDU (Table 23): ignore a stray CF/FC/unknown; a mid-reception SF/FF terminates the prior with N_UNEXP_PDU; run one session per N_AI | §9.8.3 | `session::RxSession::on_frame` |
 
+## Network-layer service primitives (implemented)
+
+The §8 service interface the network layer offers the layer above it, as sans-I/O data types (the
+primitives and their SDU parameters); no bus and no timer are run here.
+
+| Detail | Clause | Where in code |
+|---|---|---|
+| The six service primitives: N_USData.request/.confirm, N_USData_FF.indication, N_USData.indication, N_ChangeParameter.request/.confirm | §8.2.1–§8.2.6 | `service::Primitive` |
+| Mtype (diagnostics / remote diagnostics) selecting whether N_AE is part of N_AI | §8.3.1 | `service::Mtype`, `service::AddressInfo` |
+| N_AI: N_SA, N_TA, N_TAtype (physical/functional; functional is SingleFrame-only), N_AE | §8.3.2 | `service::AddressInfo`, `service::TargetAddressType` |
+| `<Length>` (32-bit, ≥ 1) and `<MessageData>` (valid only when N_Result = N_OK on an indication) | §8.3.3, §8.3.4 | `service::Primitive::us_data_request`, `service::Primitive::message_data` |
+| `<Parameter>` (STmin, BS) and `<Parameter_Value>` (8-bit) | §8.3.5, §8.3.6 | `service::Parameter`, `service::Primitive::ChangeParameterRequest` |
+| `<Result_ChangeParameter>` (N_OK, N_RX_ON, N_WRONG_PARAMETER, N_WRONG_VALUE); a change is refused (N_RX_ON) from the FF until the end of reception | §8.3.8, §8.2.5 | `service::ResultChangeParameter`, `service::change_parameter_result` |
+
 ## `<N_Result>` outcome codes (implemented)
 
 The §8.3.7 enumeration the `N_USData` service primitives report, with the two rules the clause
@@ -94,8 +108,6 @@ remaining spec, and so a later implementation has the clause to read first.
 
 | Detail | Clause | Status |
 |---|---|---|
-| Network-layer service primitives: N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters | §8.2 | planned |
-| Service data unit parameters: Mtype, N_AI, Length, MessageData, Parameter, N_Result, Result_ChangeParameter | §8.3 | planned |
 | Creating/verifying received frames by N_TAtype, and the §9.6.4.1 rule that every CF's CAN_DL match RX_DL | §9.5.2–§9.5.3, §9.6.4.1 | planned (sender-side TX_DL sizing is built; receive-side CAN_DL verification is not) |
 | Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
 | DLC error handling: a CAN frame with DLC smaller than the N_PCI implies is ignored | §10.4.3 | planned |

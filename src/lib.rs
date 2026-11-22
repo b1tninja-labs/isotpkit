@@ -40,6 +40,7 @@ pub mod flowcontrol;
 pub mod pci;
 pub mod result;
 pub mod segment;
+pub mod service;
 pub mod session;
 pub mod timing;
 
