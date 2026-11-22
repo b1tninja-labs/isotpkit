@@ -130,7 +130,7 @@ cited; `docs/iso-map.md` has the map.
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
-| [open] | Interleaving: reassemble segmented messages on distinct N_AI in parallel (multi-channel), as a gateway needs | `docs/iso-map.md` §9.9 | none: `Reassembler` is single-channel |
+| [ok] | Interleaving: reassemble segmented messages on distinct N_AI in parallel (multi-channel), as a gateway needs | `docs/iso-map.md` §9.9 | `interleave::tests::messages_on_distinct_nai_reassemble_independently`, `a_frame_on_a_second_nai_does_not_interrupt_the_first`, `idle_and_reset_channels_are_dropped` |
 | [ok] | The `<N_Result>` outcome codes (N_OK, N_TIMEOUT_A/Bs/Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR) with the first-in-list priority ordering | `docs/iso-map.md` §8.3 | `result::tests::ranks_follow_the_list_order`, `first_in_list_takes_the_earlier_value`, `sides_match_the_standard`, `errors_map_to_their_result_codes` |
 | [ok] | The network-layer service primitives (N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters) and their SDU parameters | `docs/iso-map.md` §8.2, §8.3 | `service::tests::request_validates_the_length_parameter`, `indication_exposes_data_only_when_ok`, `confirm_reports_the_n_result`, `change_parameter_is_refused_during_reception`, `mtype_governs_the_address_extension` |
 | [open] | Consolidate with `fakeobd`'s `isotp` crate into one canonical ISO-TP (see Overlap) | `docs/sources.md` | none: a cross-repo decision, deferred |

@@ -89,6 +89,16 @@ primitives and their SDU parameters); no bus and no timer are run here.
 | `<Parameter>` (STmin, BS) and `<Parameter_Value>` (8-bit) | §8.3.5, §8.3.6 | `service::Parameter`, `service::Primitive::ChangeParameterRequest` |
 | `<Result_ChangeParameter>` (N_OK, N_RX_ON, N_WRONG_PARAMETER, N_WRONG_VALUE); a change is refused (N_RX_ON) from the FF until the end of reception | §8.3.8, §8.2.5 | `service::ResultChangeParameter`, `service::change_parameter_result` |
 
+## Interleaving of messages (implemented)
+
+Concurrent reassembly of messages on distinct `N_AI`, as a gateway needs; sans-I/O, no bus and no
+timer. One receiver per `N_AI`, so the §9.8.3 unexpected-PDU handling stays scoped to a channel.
+
+| Detail | Clause | Where in code |
+|---|---|---|
+| Parallel transmission/reassembly of messages that are not mapped onto the same N_AI | §9.9 | `interleave::Interleaver` |
+| Unexpected-PDU error handling pertains only to messages with the same N_AI (a frame on one N_AI does not disturb another) | §8.3.2.4 | `interleave::Interleaver::on_frame` |
+
 ## `<N_Result>` outcome codes (implemented)
 
 The §8.3.7 enumeration the `N_USData` service primitives report, with the two rules the clause
@@ -111,7 +121,6 @@ remaining spec, and so a later implementation has the clause to read first.
 | Detail | Clause | Status |
 |---|---|---|
 | Verifying a received frame's CAN type by N_TAtype (CLASSICAL CAN vs CAN FD filtering) | §9.5.2–§9.5.3 | planned (the receive-side CAN_DL/RX_DL check of §9.6.4.1 is built; frame-type filtering needs the CAN frame's type, which the sans-I/O byte slice does not carry) |
-| Interleaving: parallel transmission/reassembly of messages on distinct N_AI | §9.9 | planned |
 | ISO-reserved 11-bit CAN IDs: 0x7F4–0x7F6 and 0x7FA–0x7FB | §B (Annex B), Table B.1 | planned |
 
 ## Citation
