@@ -18,6 +18,7 @@
 //! assert!(matches!(tx.poll(), TxAction::SendFrame(_)));       // ConsecutiveFrame
 //! ```
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::error::Error;
@@ -165,6 +166,12 @@ pub enum RxAction {
     Message(Vec<u8>),
     /// More `ConsecutiveFrames` are expected; nothing to send yet.
     Continue,
+    /// The frame was an unexpected N_PDU and was ignored (§9.8.3): a `ConsecutiveFrame` with no
+    /// reception in progress, a received `FlowControl`, or an unknown `N_PCItype`.
+    Ignored,
+    /// A `SingleFrame` or `FirstFrame` interrupted a reception in progress: the previous reception
+    /// is terminated with `N_UNEXP_PDU` (§9.8.3), and the inner action is for the new frame.
+    RestartedAfterUnexpected(Box<RxAction>),
 }
 
 /// A `FlowControl`-paced receiver. It accepts frames, reassembles the message, and decides when to
@@ -210,36 +217,51 @@ impl RxSession {
         FlowControl::new(FlowStatus::ContinueToSend, self.block_size, self.stmin)
     }
 
-    /// Feed one received frame.
+    /// Feed one received frame, following the unexpected-N_PDU rules of §9.8.3.
+    ///
+    /// A stray `ConsecutiveFrame` (no reception in progress), a received `FlowControl`, and an
+    /// unknown `N_PCItype` are [`RxAction::Ignored`]. A `SingleFrame` or `FirstFrame` that arrives
+    /// mid-reception terminates the previous one (`N_UNEXP_PDU`) and returns
+    /// [`RxAction::RestartedAfterUnexpected`]. Run one `RxSession` per address information (`N_AI`)
+    /// so that frames on a different channel never interrupt this one.
     ///
     /// # Errors
-    /// Any [`Error`] the decoder or reassembler returns, including [`Error::WrongSequenceNumber`]
-    /// and [`Error::ConsecutiveFrameWithoutFirstFrame`].
+    /// [`Error::WrongSequenceNumber`] (`N_WRONG_SN`, §9.6.4) for a `ConsecutiveFrame` out of order,
+    /// and any frame-validation error from the decoder other than a reserved `N_PCItype`.
     pub fn on_frame(&mut self, frame: &[u8]) -> Result<RxAction, Error> {
-        match decode_addressed(frame, self.addressing)? {
+        let pdu = match decode_addressed(frame, self.addressing) {
+            Ok(pdu) => pdu,
+            // An unknown N_PDU (reserved N_PCItype) is ignored (§9.8.3).
+            Err(Error::ReservedPciType(_)) => return Ok(RxAction::Ignored),
+            Err(err) => return Err(err),
+        };
+        match pdu {
             NPdu::Single(sf) => {
+                let interrupted = self.active;
                 self.reset();
-                Ok(RxAction::Message(sf.data().to_vec()))
+                Ok(Self::restarted(
+                    interrupted,
+                    RxAction::Message(sf.data().to_vec()),
+                ))
             }
             NPdu::First(ff) => {
+                let interrupted = self.active;
                 self.reset();
-                if ff.length() > self.buffer_limit {
-                    Ok(RxAction::SendFlowControl(FlowControl::new(
-                        FlowStatus::Overflow,
-                        0,
-                        0,
-                    )))
+                let action = if ff.length() > self.buffer_limit {
+                    RxAction::SendFlowControl(FlowControl::new(FlowStatus::Overflow, 0, 0))
                 } else {
                     self.reassembler.feed(&SegmentPdu::First(ff))?;
                     self.active = true;
                     self.cfs_since_fc = 0;
                     self.waits_sent = 0;
-                    Ok(RxAction::SendFlowControl(self.cts()))
-                }
+                    RxAction::SendFlowControl(self.cts())
+                };
+                Ok(Self::restarted(interrupted, action))
             }
             NPdu::Consecutive(cf) => {
+                // A ConsecutiveFrame with no reception in progress is ignored (§9.8.3).
                 if !self.active {
-                    return Err(Error::ConsecutiveFrameWithoutFirstFrame);
+                    return Ok(RxAction::Ignored);
                 }
                 if let Some(message) = self.reassembler.feed(&SegmentPdu::Consecutive(cf))? {
                     self.reset();
@@ -255,7 +277,15 @@ impl RxSession {
                 }
             }
             // A receiver does not expect a FlowControl; ignore it (§9.8.3).
-            NPdu::Flow(_) => Ok(RxAction::Continue),
+            NPdu::Flow(_) => Ok(RxAction::Ignored),
+        }
+    }
+
+    fn restarted(interrupted: bool, action: RxAction) -> RxAction {
+        if interrupted {
+            RxAction::RestartedAfterUnexpected(Box::new(action))
+        } else {
+            action
         }
     }
 
@@ -320,6 +350,7 @@ mod tests {
                     RxAction::SendFlowControl(fc) => tx.on_flow_control(fc),
                     RxAction::Message(m) => received = Some(m),
                     RxAction::Continue => {}
+                    other => panic!("unexpected receiver action in a clean transfer: {other:?}"),
                 },
                 // The receiver's FlowControl was delivered inline above; nothing to wait on here.
                 TxAction::WaitForFlowControl | TxAction::WaitSeparationTime(_) => {}
@@ -404,5 +435,35 @@ mod tests {
             Ok(RxAction::SendFlowControl(_))
         ));
         assert_eq!(rx.request_wait(), Err(Error::WaitFrameOverrun(2)));
+    }
+
+    #[test]
+    fn unexpected_frames_are_ignored() {
+        let mut rx = RxSession::new(Addressing::Normal, 1 << 20, 0, 0, 4);
+        // A ConsecutiveFrame with no reception in progress: ignored (§9.8.3).
+        assert_eq!(rx.on_frame(&[0x21, 1, 2, 3]).unwrap(), RxAction::Ignored);
+        // A received FlowControl: ignored.
+        assert_eq!(rx.on_frame(&[0x30, 0, 0]).unwrap(), RxAction::Ignored);
+        // An unknown N_PCItype (reserved 0x4..): ignored.
+        assert_eq!(rx.on_frame(&[0x40, 0, 0]).unwrap(), RxAction::Ignored);
+        assert!(!rx.in_progress());
+    }
+
+    #[test]
+    fn a_new_first_frame_interrupts_the_reception() {
+        let mut rx = RxSession::new(Addressing::Normal, 1 << 20, 0, 0, 4);
+        let first = segment_addressed(&[0u8; 30], 8, Addressing::Normal).unwrap();
+        assert!(matches!(
+            rx.on_frame(&first[0].encode()).unwrap(),
+            RxAction::SendFlowControl(_)
+        ));
+        // A SingleFrame mid-reception terminates the old one (N_UNEXP_PDU) and delivers the new.
+        match rx.on_frame(&[0x02, 0x3E, 0x00]).unwrap() {
+            RxAction::RestartedAfterUnexpected(inner) => {
+                assert_eq!(*inner, RxAction::Message(vec![0x3E, 0x00]));
+            }
+            other => panic!("expected RestartedAfterUnexpected, got {other:?}"),
+        }
+        assert!(!rx.in_progress());
     }
 }

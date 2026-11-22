@@ -104,11 +104,12 @@ edit either file.
 | [ok] | The 32-bit FirstFrame escape for FF_DL > 4095 | `docs/iso-map.md` §9.6.3 | `pci::tests::first_frame_32bit_escape_roundtrip` |
 | [ok] | TX_DL-based segmentation: `segment_with_tx_dl` sizes SF/FF/CF for each CAN FD TX_DL (12/16/20/24/32/48/64) and picks the 12-bit or 32-bit FF form | `src/segment.rs`; `docs/iso-map.md` §9.5 | `segment::tests::can_fd_segmentation_round_trips` |
 
-## FlowControl pacing (sans-I/O)
+## Paced sessions (sans-I/O)
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
 | [ok] | A FlowControl-paced sender/receiver loop (BS blocks, WAIT, N_WFTmax) | `src/session.rs` (`TxSession`/`RxSession`, emitting actions — no bus, no live timer); `docs/iso-map.md` §9.6.5, §9.7, §9.8.4 | `session::tests::paced_transfer_round_trips_across_block_sizes`; `session::tests::block_size_waits_for_flow_control_between_blocks`; `session::tests::overflow_aborts_the_sender`; `session::tests::wait_frames_are_capped_at_wft_max` |
+| [ok] | Unexpected-N_PDU handling (Table 23): the ignore/terminate state machine over NWL status, half/full duplex and N_AI, raising N_UNEXP_PDU | `src/session.rs` (`RxSession::on_frame`, one session per N_AI); `docs/iso-map.md` §9.8.3 | `session::tests::unexpected_frames_are_ignored`; `session::tests::a_new_first_frame_interrupts_the_reception` |
 
 ## Planned (not built)
 
@@ -129,7 +130,6 @@ cited; `docs/iso-map.md` has the map.
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
-| [open] | Unexpected-N_PDU handling (Table 23): the ignore/terminate state machine over NWL status, half/full duplex and N_AI, raising N_UNEXP_PDU | `docs/iso-map.md` §9.8.3 | none: the reassembler only rejects a mid-message SF/FF and an orphan CF |
 | [open] | Interleaving: reassemble segmented messages on distinct N_AI in parallel (multi-channel), as a gateway needs | `docs/iso-map.md` §9.9 | none: `Reassembler` is single-channel |
 | [open] | The `<N_Result>` outcome codes (N_OK, N_TIMEOUT_A/Bs/Cr, N_WRONG_SN, N_INVALID_FS, N_UNEXP_PDU, N_WFT_OVRN, N_BUFFER_OVFLW, N_ERROR) with the first-in-list priority ordering | `docs/iso-map.md` §8.3 | none: `Error` is the crate's own enum, not the N_Result model |
 | [open] | The network-layer service primitives (N_USData.request/.confirm/.indication, N_USData_FF.indication, N_ChangeParameters) and their SDU parameters | `docs/iso-map.md` §8.2, §8.3 | none: no service interface is built |
